@@ -205,6 +205,38 @@ def _alpha_over_sockets(node):
     return node.inputs[1], node.inputs[2]
 
 
+def _set_scale_to_render_size(scale_node) -> bool:
+    """Make a compositor Scale node fit the render, on 4.x or 5.x.
+
+    This node is not cosmetic. An Image node emits at the IMAGE's resolution,
+    not the render's, so without it the compositor pastes an 8064 px plate 1:1
+    into a half-size render and you get a centre crop — a 2x zoom into the
+    photograph, with the CG apparently missing. It looks correct only at
+    Render % = 100, which is exactly the setting nobody uses while iterating,
+    so the bug hides until final output.
+
+    Blender 5 moved the mode from a `space` enum property onto a menu input
+    socket whose values are title-case strings.
+    """
+    if hasattr(scale_node, "space"):                     # Blender 4.x
+        scale_node.space = "RENDER_SIZE"
+        return True
+    socket = scale_node.inputs.get("Type")               # Blender 5.x
+    if socket is not None:
+        try:
+            socket.default_value = "Render Size"
+        except TypeError:
+            return False
+        frame = scale_node.inputs.get("Frame Type")
+        if frame is not None:
+            # The plate and the render share an aspect ratio by construction,
+            # so Stretch and Fit agree; Stretch is the safer of the two if a
+            # rounding difference ever makes them disagree by a pixel.
+            frame.default_value = "Stretch"
+        return True
+    return False
+
+
 def setup_render(scene, plate_image, props):
     scene.render.engine = "CYCLES"
     try:
@@ -218,14 +250,18 @@ def setup_render(scene, plate_image, props):
     scene.view_settings.view_transform = props.view_transform
 
     tree, output, output_socket = _compositor_tree(scene)
-    output.location = (560, 0)
+    output.location = (700, 0)
     layers = tree.nodes.new("CompositorNodeRLayers"); layers.location = (0, 200)
-    plate = tree.nodes.new("CompositorNodeImage"); plate.location = (0, -200)
+    plate = tree.nodes.new("CompositorNodeImage"); plate.location = (-260, -200)
     plate.image = plate_image
-    over = tree.nodes.new("CompositorNodeAlphaOver"); over.location = (320, 0)
+    over = tree.nodes.new("CompositorNodeAlphaOver"); over.location = (460, 0)
+
+    scale = tree.nodes.new("CompositorNodeScale"); scale.location = (60, -200)
+    _set_scale_to_render_size(scale)
+    tree.links.new(plate.outputs["Image"], scale.inputs["Image"])
 
     background, foreground = _alpha_over_sockets(over)
-    tree.links.new(plate.outputs["Image"], background)
+    tree.links.new(scale.outputs["Image"], background)
     tree.links.new(layers.outputs["Image"], foreground)
     tree.links.new(over.outputs["Image"], output.inputs[output_socket])
 
