@@ -45,10 +45,12 @@ server/                the solve daemon. Runs in its own venv, models resident.
 ├── solver_server.py   FastAPI, one endpoint that matters
 └── tests/             450+ tests, no Blender and no torch required
 
-docs/                  BLUEPRINT, LIGHTING_ADDENDUM, HANDOFF, SETUP,
-                       DECISIONS (the ambiguous calls), VERIFICATION (milestones)
+docs/                  WORKFLOW (start here), BLUEPRINT, LIGHTING_ADDENDUM,
+                       HANDOFF, SETUP, DECISIONS (the ambiguous calls),
+                       VERIFICATION (how each milestone was checked)
 legacy/                the original unexecuted scaffold, and what was wrong with it
-tools/                 Blender smoke test, add-on zip builder
+tools/                 Blender smoke test, render checks, scale calibration,
+                       add-on zip builder
 ```
 
 ### Two processes, on purpose
@@ -103,6 +105,10 @@ the weights load; every one after ~1–3 s.
 **Solve Camera Only** skips depth entirely and needs no models or weights at
 all — the fastest way to check the camera before committing to a full solve.
 
+**[docs/WORKFLOW.md](docs/WORKFLOW.md) is the guide to using it**: the order of
+operations, what the bounce proxy and sun gobo are actually for, when to skip
+them, and how to tell each step worked.
+
 The add-on installs via **Edit ▸ Preferences ▸ Add-ons ▸ Install from Disk**,
 pointed at the `photo3d.zip` that `make addon` writes.
 
@@ -121,8 +127,8 @@ remains manual for each milestone.
 | **M1** EXIF solve | **passes on the real `IMG_7096.HEIC`**: pitch 3.279°, roll 0.715°, heading 76.944°, 14 mm, zero warnings. Four-orientation set agrees within 0.25°. |
 | **M2** camera into Blender | rotation maths pinned by 200+ synthetic cases and re-checked against the real solve; camera verified inside Blender. Needs the backplate eye-check. |
 | **M3** depth → proxy | runs end to end on the real DNG (45 s cold, MPS). Ground-plane recovery within 2% on analytic depth. **But Depth Pro's metric scale is ~5x out on these scenes** — calibrate before trusting it, see below. |
-| **M4** shadow proxy + compositor | node graph asserted, including Window coords and the Alpha Over order. Chrome-sphere check needs a render. |
-| **M5** bounce proxy | ray-visibility split asserted both ways; strength calibration tested; A/B toggle built for the double-counting check. Now driven by the linear EXR when there is one. Needs the white-sphere render. |
+| **M4** shadow proxy + compositor | **verified by rendering.** CG objects cast shadows onto the plate (283 shadow px, composited plate 0.603 lit -> 0.041 shadowed) and a chrome sphere reflects the plate. Required a real fix — see below. |
+| **M5** bounce proxy | ray-visibility split asserted both ways and shadows verified to survive it; strength calibration tested; A/B toggle for the double-counting check. Driven by the linear EXR when there is one. Needs the white-sphere render by eye. |
 | **M6** DNG lighting plate | **works on the real `IMG_7263.DNG`** — linear EXR, max 2.890 against a median of 0.210, 0.52% of pixels above diffuse white. Required a decoder change; see below. |
 | **M7** shadow extraction + gobo | intrinsic decomposition with a tested fallback; the bake is now exception-safe, verified by simulating a mid-render failure. |
 
@@ -175,9 +181,32 @@ removed, and `sky_type='NISHITA'` → `'MULTIPLE_SCATTERING'`. All three are
 handled by feature detection rather than version checks, so both work.
 
 ```bash
-make smoke     # 17 checks inside a real Blender, including that a failed
-               # gobo bake leaves the scene exactly as it found it
+make smoke           # 18 checks inside a real Blender
+make render-checks   # renders small images and measures the light itself
 ```
+
+Wiring can be perfect and the picture still wrong, because Cycles decides what
+a shadow catcher and a Transparent BSDF mean together — which is exactly how
+the shadow bug below survived a fully-passing smoke test.
+
+### Shadows: the proxy shader was cancelling the shadow catcher
+
+The original design made the proxy transparent to camera rays so the eye would
+see the plate through it. That is precisely what a Cycles shadow catcher
+already does, and doing both broke it — a camera ray that passes straight
+through never hits the catcher, so there is no surface to darken:
+
+| proxy material | shadow pixels |
+|---|---|
+| `Is Camera Ray -> Transparent` (as designed) | **0** |
+| plain Principled (now) | **283**, mean alpha 0.82 |
+
+Invisibility now comes from `is_shadow_catcher` + `film_transparent`, which is
+what those are for. Glossy rays still hit the Window-projected plate, so
+reflections are unchanged.
+
+**New here: [docs/WORKFLOW.md](docs/WORKFLOW.md)** — the order of operations,
+what each step is for, and how to tell it worked. Start there.
 
 ---
 

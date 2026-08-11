@@ -30,3 +30,6 @@ venv/
 
 # Claude Code local machine settings
 .claude/settings.local.json
+
+# render check output
+.render_checks/

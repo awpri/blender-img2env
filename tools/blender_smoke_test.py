@@ -148,21 +148,31 @@ def main() -> int:
         facing = world_normals @ np.array(forward[:])
         assert (facing < 0).mean() > 0.9, "proxy normals point away from the camera"
 
-    @check("proxy material routes camera rays to Transparent")
+    @check("proxy material is Window-projected and NOT camera-transparent")
     def _():
+        """The proxy must be opaque to camera rays.
+
+        It used to route them to a Transparent BSDF so the eye would see the
+        plate, which is exactly what the shadow catcher already does — and
+        doing both broke it: a camera ray that passes through never hits the
+        catcher, so Cycles had no surface to darken and CG objects cast no
+        shadow at all. tools/render_checks.py measures the consequence; this
+        check guards the cause.
+        """
         material = bpy.data.objects["Photo3D_Proxy"].material_slots[0].material
         nodes = {n.type for n in material.node_tree.nodes}
-        assert {"MIX_SHADER", "BSDF_TRANSPARENT", "LIGHT_PATH", "TEX_IMAGE"} <= nodes
+        assert "BSDF_TRANSPARENT" not in nodes, \
+            "a Transparent branch here silently cancels the shadow catcher"
+        assert "TEX_IMAGE" in nodes and "BSDF_PRINCIPLED" in nodes
 
-        mix = next(n for n in material.node_tree.nodes if n.type == "MIX_SHADER")
-        # Fac=1 (a camera ray) selects input 2, which must be the Transparent.
-        assert mix.inputs[2].links[0].from_node.type == "BSDF_TRANSPARENT"
-        assert mix.inputs[1].links[0].from_node.type == "BSDF_PRINCIPLED"
-        assert mix.inputs["Fac"].links[0].from_socket.name == "Is Camera Ray"
+        output = next(n for n in material.node_tree.nodes if n.type == "OUTPUT_MATERIAL")
+        assert output.inputs["Surface"].links[0].from_node.type == "BSDF_PRINCIPLED"
 
         texture = next(n for n in material.node_tree.nodes if n.type == "TEX_IMAGE")
         assert texture.inputs["Vector"].links[0].from_socket.name == "Window", \
             "Window coords are what make reflections pick up the real ground"
+        assert bpy.data.objects["Photo3D_Proxy"].is_shadow_catcher, \
+            "invisibility now comes from the shadow catcher, so it must be on"
 
     @check("sun and sky are placed from the ephemeris")
     def _():

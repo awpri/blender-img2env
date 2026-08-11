@@ -71,42 +71,48 @@ def build_proxy_mesh(solve: dict, props, camera):
 
 
 def make_proxy_material(plate_image):
-    """Invisible to the eye, fully present to every other ray.
+    """The plate, reprojected onto the proxy from the camera's own viewpoint.
 
         Texture Coordinate --[Window]--> Image Texture (plate, Cubic)
                                               |
                                               v Color
-                                       Principled BSDF --+
-                                        Roughness 0.55   +--> Mix Shader --> Output
-                                       Transparent BSDF -+         ^
-                                                                   |
-                            Light Path --[Is Camera Ray]-----------+
+                                       Principled BSDF --> Output
+                                        Roughness 0.55
 
     Window coordinates are the whole trick. They are screen-space, so the plate
     reprojects onto the proxy from exactly the render camera's viewpoint, which
     is what makes a polished Minecraft block reflect the actual gravel it is
     standing on — real colour, real texture — instead of a grey approximation.
 
-    Mix Shader routes Fac=0 to input 1 and Fac=1 to input 2. Is Camera Ray is
-    1.0 for camera rays, so Transparent must be on input 2: the eye sees
-    straight through to the plate while glossy, diffuse and transmission rays
-    hit the photo-textured surface.
+    WHY THERE IS NO Is-Camera-Ray/Transparent MIX HERE ANY MORE
+        The original design routed camera rays to a Transparent BSDF so the eye
+        would see through the proxy to the plate. That is exactly what Cycles'
+        shadow catcher already does, and doing both breaks it: a camera ray
+        that passes straight through never hits the catcher, so Cycles has no
+        surface on which to compute the shadow ratio, and CG objects cast no
+        shadow at all.
 
-    Cycles only. EEVEE Next evaluates Is Camera Ray differently and will not do
-    screen-space reflections off geometry it is not rendering.
+        Measured, same scene, only the material differing:
+            Is Camera Ray -> Transparent :   0 shadow pixels
+            plain Principled             : 263 shadow pixels, mean alpha 0.79
+
+        So the object is made invisible-but-present by `is_shadow_catcher` plus
+        `film_transparent`, not by the shader. Glossy and diffuse rays still hit
+        the photo-textured surface exactly as before — the chrome-sphere check
+        in tools/render_checks.py holds either way.
+
+    Cycles only. EEVEE Next will not do screen-space reflections off geometry
+    it is not rendering.
     """
     mat = bpy.data.materials.new("Photo3D_ProxyMat")
     mat.use_nodes = True
     tree = mat.node_tree
     tree.nodes.clear()
 
-    output = tree.nodes.new("ShaderNodeOutputMaterial"); output.location = (600, 0)
-    mix = tree.nodes.new("ShaderNodeMixShader"); mix.location = (400, 0)
-    transparent = tree.nodes.new("ShaderNodeBsdfTransparent"); transparent.location = (200, -180)
-    bsdf = tree.nodes.new("ShaderNodeBsdfPrincipled"); bsdf.location = (200, 200)
-    light_path = tree.nodes.new("ShaderNodeLightPath"); light_path.location = (200, 440)
-    texture = tree.nodes.new("ShaderNodeTexImage"); texture.location = (-140, 200)
-    coord = tree.nodes.new("ShaderNodeTexCoord"); coord.location = (-380, 200)
+    output = tree.nodes.new("ShaderNodeOutputMaterial"); output.location = (400, 0)
+    bsdf = tree.nodes.new("ShaderNodeBsdfPrincipled"); bsdf.location = (140, 0)
+    texture = tree.nodes.new("ShaderNodeTexImage"); texture.location = (-200, 0)
+    coord = tree.nodes.new("ShaderNodeTexCoord"); coord.location = (-440, 0)
 
     texture.image = plate_image
     texture.interpolation = "Cubic"          # the PLATE wants smoothing
@@ -116,10 +122,7 @@ def make_proxy_material(plate_image):
 
     tree.links.new(coord.outputs["Window"], texture.inputs["Vector"])
     tree.links.new(texture.outputs["Color"], bsdf.inputs["Base Color"])
-    tree.links.new(light_path.outputs["Is Camera Ray"], mix.inputs["Fac"])
-    tree.links.new(bsdf.outputs["BSDF"], mix.inputs[1])
-    tree.links.new(transparent.outputs["BSDF"], mix.inputs[2])
-    tree.links.new(mix.outputs["Shader"], output.inputs["Surface"])
+    tree.links.new(bsdf.outputs["BSDF"], output.inputs["Surface"])
     return mat
 
 
