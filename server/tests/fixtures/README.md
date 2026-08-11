@@ -1,13 +1,25 @@
 # EXIF fixtures
 
-`exiftool -j -n -G0:1` dumps. No pixels — every one of these exercises a code
-path that only reads metadata, which is the whole of milestone M1.
+Real `exiftool -j -n -G0:1` dumps, taken from the files in `testphotos/`. No
+pixels — every one of these exercises a code path that only reads metadata,
+which is the whole of milestone M1, and it means CI needs neither the photos
+nor a decoder.
 
 | file | what it pins |
 |---|---|
-| `img7096_exif.json` | The reference photo from `LIGHTING_ADDENDUM.md`. 14 mm ultra-wide, portrait, ProRAW, with the GPS coordinates missing exactly as the real export has them. This is the M1 acceptance fixture. |
+| `img7096_exif.json` | The reference photo. 14 mm ultra-wide, portrait, **HEIC** (not ProRAW as `LIGHTING_ADDENDUM.md` assumed) and it **kept its GPS**, so the solar path runs. The M1 acceptance fixture. |
+| `img7263_dng_exif.json` | Apple ProRAW: DNG 1.7, `Linear Raw`, with a semantic-mask `SubIFD1` sitting next to the full-resolution `SubIFD`. Pins the tag layout that nearly scaled the solve by a third. |
 | `orientation_{1,3,6,8}_exif.json` | One physical camera pose, four ways of holding the phone. They must all report the same pitch and roll. |
-| `sunny_geneva_exif.json` | Has real coordinates and a UTC timestamp, so the solar ephemeris actually runs. |
+| `sunny_geneva_exif.json` | Synthetic. A second location and date for the ephemeris, well away from the Oberland. |
+
+Binary blobs and the bulkier Apple profile arrays are stripped so the fixtures
+stay readable in a diff. Everything the solver reads is untouched.
+
+Regenerate after re-shooting, from the repository root:
+
+```bash
+exiftool -j -n -G0:1 testphotos/IMG_7096.HEIC > server/tests/fixtures/img7096_exif.json
+```
 
 ## Where the orientation vectors come from
 

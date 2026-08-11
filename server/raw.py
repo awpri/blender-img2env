@@ -23,6 +23,7 @@ Window-projected reprojection half a frame out.
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -89,16 +90,74 @@ def warp_opcodes(exif: dict) -> WarpOpcodes:
 # developing
 # ---------------------------------------------------------------------------
 
-def develop_linear(path: str | Path, half_size: bool = False) -> np.ndarray:
-    """RAW -> linear scene-referred float32 RGB in sRGB primaries.
+#: Long edge the linear plate is developed at. Lighting is low-frequency —
+#: a bounce proxy does not care about pixel-level detail — and a full 48 MP
+#: float32 RGBA buffer is ~780 MB, which is a lot of unified memory to spend on
+#: something that will be blurred by the first diffuse bounce anyway.
+LIGHTING_LONG_EDGE = 2048
+
+
+def _develop_linear_coreimage(path: str | Path, long_edge: int) -> np.ndarray:
+    """Apple's own RAW decoder, via Core Image. macOS only.
+
+    This exists because LibRaw 0.22 cannot open an iPhone 17 Pro ProRAW file at
+    all: DNG 1.7 with JPEG XL compression returns "Unsupported file format or
+    not RAW file". Core Image handles it natively, offline, with no extra
+    download — it is the same decoder Photos uses.
+
+    boostAmount=0 disables Apple's tone/boost curve, which is the whole point:
+    the output stays linear and keeps the highlights a display-referred plate
+    throws away. Measured on IMG_7263.DNG: max 2.89 against a median of 0.21,
+    with 0.5% of pixels above 1.0.
+    """
+    import objc
+    from Foundation import NSURL
+    from Quartz import (CGColorSpaceCreateWithName, CIContext, CIFilter,
+                        CIRAWFilter, kCGColorSpaceExtendedLinearSRGB, kCIFormatRGBAf)
+
+    raw_filter = CIRAWFilter.filterWithImageURL_(NSURL.fileURLWithPath_(str(path)))
+    if raw_filter is None:
+        raise PlateError(f"Core Image could not open {path} as RAW")
+
+    raw_filter.setBoostAmount_(0.0)                 # no tone curve; stay linear
+    for setter, value in (("setGamutMappingEnabled_", False),
+                          ("setExtendedDynamicRangeAmount_", 2.0)):
+        if hasattr(raw_filter, setter):
+            getattr(raw_filter, setter)(value)      # keep values above 1.0
+
+    image = raw_filter.outputImage()
+    if image is None:
+        raise PlateError(f"Core Image produced no image for {path}")
+
+    extent = image.extent()
+    scale = min(1.0, long_edge / max(extent.size.width, extent.size.height))
+    if scale < 1.0:
+        resize = CIFilter.filterWithName_("CILanczosScaleTransform")
+        resize.setValue_forKey_(image, "inputImage")
+        resize.setValue_forKey_(scale, "inputScale")
+        image = resize.outputImage()
+        extent = image.extent()
+
+    width, height = int(extent.size.width), int(extent.size.height)
+    row_bytes = width * 4 * 4                        # RGBA, float32
+    buffer = bytearray(row_bytes * height)
+    context = CIContext.contextWithOptions_(None)
+    context.render_toBitmap_rowBytes_bounds_format_colorSpace_(
+        image, buffer, row_bytes, extent, kCIFormatRGBAf,
+        CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB))
+
+    del objc                                          # imported only to fail early
+    return np.frombuffer(bytes(buffer), dtype=np.float32).reshape(height, width, 4)[..., :3].copy()
+
+
+def _develop_linear_rawpy(path: str | Path, half_size: bool = False) -> np.ndarray:
+    """LibRaw via rawpy. Broad camera support, but see the note above about
+    DNG 1.7.
 
     gamma=(1,1) and no_auto_bright are the whole point: any tone curve or
     exposure stretch here would put the pipeline back where the JPEG was.
     """
-    try:
-        import rawpy
-    except ImportError:
-        raise PlateError("rawpy is not installed: pip install rawpy") from None
+    import rawpy
 
     with rawpy.imread(str(path)) as raw:
         rgb = raw.postprocess(
@@ -109,20 +168,80 @@ def develop_linear(path: str | Path, half_size: bool = False) -> np.ndarray:
             use_camera_wb=True,
             half_size=half_size,
         )
-    return (rgb.astype(np.float32) / 65535.0)
+    return rgb.astype(np.float32) / 65535.0
+
+
+def develop_linear(path: str | Path, long_edge: int = LIGHTING_LONG_EDGE) -> np.ndarray:
+    """RAW -> linear scene-referred float32 RGB.
+
+    Core Image first on macOS, because the target camera is an iPhone and
+    Apple's decoder is the only one that reads its ProRAW; rawpy second,
+    because it is the portable one. Both return display-oriented pixels, so
+    the plate agrees with the intrinsics in exif.py.
+    """
+    attempts = []
+
+    if sys.platform == "darwin":
+        try:
+            return _develop_linear_coreimage(path, long_edge)
+        except ImportError as exc:
+            attempts.append(f"Core Image: {exc} (pip install pyobjc-framework-Quartz)")
+        except Exception as exc:                                  # noqa: BLE001
+            attempts.append(f"Core Image: {type(exc).__name__}: {exc}")
+
+    try:
+        return _develop_linear_rawpy(path)
+    except ImportError:
+        attempts.append("rawpy: not installed (pip install rawpy)")
+    except Exception as exc:                                      # noqa: BLE001
+        attempts.append(f"rawpy/LibRaw: {exc}")
+
+    raise PlateError(
+        f"no RAW decoder could read {Path(path).name}. Tried:\n  "
+        + "\n  ".join(attempts)
+        + "\n\nAn iPhone 17 Pro ProRAW is DNG 1.7 with JPEG XL compression, "
+        "which LibRaw 0.22 does not support. On macOS install "
+        "pyobjc-framework-Quartz to use Apple's own decoder. Otherwise convert "
+        "with the free Adobe DNG Converter first.")
 
 
 def develop_display(path: str | Path) -> np.ndarray:
-    """RAW -> display-referred 8-bit-ish RGB, for the visible backplate."""
+    """RAW -> display-referred RGB for the visible backplate.
+
+    Apple's rendering is wanted here, not avoided: the beauty plate should look
+    the way the photograph looks. Only the lighting plate needs to be linear.
+    """
+    if sys.platform == "darwin":
+        try:
+            from Foundation import NSURL
+            from Quartz import (CIContext, CIRAWFilter,
+                                CGColorSpaceCreateWithName, kCGColorSpaceSRGB,
+                                kCIFormatRGBA8)
+
+            raw_filter = CIRAWFilter.filterWithImageURL_(NSURL.fileURLWithPath_(str(path)))
+            if raw_filter is not None and raw_filter.outputImage() is not None:
+                image = raw_filter.outputImage()
+                extent = image.extent()
+                width, height = int(extent.size.width), int(extent.size.height)
+                row_bytes = width * 4
+                buffer = bytearray(row_bytes * height)
+                CIContext.contextWithOptions_(None).render_toBitmap_rowBytes_bounds_format_colorSpace_(
+                    image, buffer, row_bytes, extent, kCIFormatRGBA8,
+                    CGColorSpaceCreateWithName(kCGColorSpaceSRGB))
+                return np.frombuffer(bytes(buffer), dtype=np.uint8).reshape(
+                    height, width, 4)[..., :3].copy()
+        except Exception:                                          # noqa: BLE001
+            pass                                                   # fall through to rawpy
+
     try:
         import rawpy
     except ImportError:
-        raise PlateError("rawpy is not installed: pip install rawpy") from None
+        raise PlateError("no RAW decoder for the display plate: install "
+                         "pyobjc-framework-Quartz (macOS) or rawpy") from None
 
     with rawpy.imread(str(path)) as raw:
-        rgb = raw.postprocess(output_bps=8, use_camera_wb=True,
-                              output_color=rawpy.ColorSpace.sRGB)
-    return rgb
+        return raw.postprocess(output_bps=8, use_camera_wb=True,
+                               output_color=rawpy.ColorSpace.sRGB)
 
 
 def load_display_image(path: str | Path):

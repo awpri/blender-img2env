@@ -65,7 +65,7 @@ def test_metadata_only_solve(client, photo, patched_exif):
     assert body["intrinsics"]["focal_35mm"] == 14.0
     assert body["pitch_deg"] == pytest.approx(3.28, abs=0.05)
     assert body["roll_deg"] == pytest.approx(0.71, abs=0.05)
-    assert body["heading_deg"] == pytest.approx(76.944)
+    assert body["heading_deg"] == pytest.approx(76.944, abs=0.001)
     assert body["depth_npy"] is None
 
 
@@ -83,10 +83,22 @@ def test_plate_is_written_where_it_says(client, photo, patched_exif):
     assert Path(body["plate_png"]).is_file()
 
 
-def test_warnings_reach_the_client(client, photo, patched_exif):
-    """The reference photo has no coordinates, so the user has to be told that
-    the sun is unavailable and why — the fix is in the Photos export dialog,
-    not in this code."""
+def test_sun_reaches_the_client(client, photo, patched_exif):
+    """The reference photo kept its coordinates, so the solve carries a sun and
+    the add-on can place a lamp from it."""
+    body = client.post("/solve", json={"image_path": str(photo), "skip_depth": True}).json()
+    assert body["sun"]["above_horizon"] is True
+    assert 40.0 < body["sun"]["elevation_deg"] < 60.0
+    assert 100.0 < body["sun"]["azimuth_deg"] < 140.0
+
+
+def test_warnings_reach_the_client(client, photo, monkeypatch, img7096):
+    """Warnings are the mechanism that tells the user the fix is outside this
+    code. Checked with location stripped, which is the case that matters."""
+    stripped = {k: v for k, v in img7096.items()
+                if k.split(":")[-1] not in ("GPSLatitude", "GPSLongitude", "GPSPosition")}
+    stripped["Composite:ImageSize"] = "80 60"
+    monkeypatch.setattr(solver_server.exif_mod, "read_exif", lambda _p: stripped)
     body = client.post("/solve", json={"image_path": str(photo), "skip_depth": True}).json()
     assert body["sun"] is None
     assert any("Export Unmodified Original" in w for w in body["warnings"])

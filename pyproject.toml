@@ -24,7 +24,17 @@ depth = [
 # Marigold's micro-detail, fitted onto Depth Pro's scale.
 refine = ["diffusers>=0.27", "transformers", "accelerate"]
 # ProRAW -> linear EXR. opencv-python is here for its EXR writer.
-raw = ["rawpy>=0.19", "opencv-python>=4.9", "pillow-heif>=0.15"]
+#
+# pyobjc-framework-Quartz is not optional in practice on this project: LibRaw
+# 0.22 cannot open an iPhone 17 Pro ProRAW file (DNG 1.7 / JPEG XL) at all, so
+# Apple's own Core Image decoder is the only offline route to a linear plate.
+# rawpy stays for other cameras. See docs/DECISIONS.md section 1b.
+raw = [
+    "rawpy>=0.19",
+    "opencv-python>=4.9",
+    "pillow-heif>=0.15",
+    "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
+]
 # Intrinsic decomposition for the sun gobo.
 # pip install git+https://github.com/compphoto/Intrinsic.git
 shading = []

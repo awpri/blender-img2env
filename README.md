@@ -85,6 +85,9 @@ Two git-only dependencies the venv target cannot install for you:
 Then fetch Depth Pro's weights with its `get_pretrained_models.sh` (~1.9 GB),
 and `brew install exiftool` — it is the only thing that reads Apple's MakerNote.
 
+Everything must be run from the repository root; the paths in these commands
+and in `docs/VERIFICATION.md` are relative to it.
+
 In Blender: **N-panel ▸ Photo3D**, pick a photo, **Solve Photo**. First solve
 ~15 s while weights load; every one after ~1–3 s.
 
@@ -96,21 +99,34 @@ for checking the camera before committing to a full solve.
 ## State of the milestones
 
 The scaffold this was built from had never been executed. Everything below has
-been rebuilt, tested where testing is possible without a photograph, and run
-against a real Blender. **No part of it has been run against the real
-`IMG_7096`** — the file is not in the repo — and Depth Pro and rawpy are not
-installed here. `docs/VERIFICATION.md` says exactly what remains manual for
-each milestone.
+been rebuilt and tested; M1, M2 and M6 have now been run against the real
+photographs, and the add-on against a real Blender. M3–M5 and M7 still need
+Depth Pro weights and a render. `docs/VERIFICATION.md` says exactly what
+remains manual for each milestone.
 
 | | status |
 |---|---|
-| **M1** EXIF solve | acceptance test passes on a fixture: pitch 3.279°, roll 0.715°, heading 76.944°, 14 mm. Four-orientation calibration set agrees within 0.25°. Needs a re-dump from the real file to confirm tag names. |
-| **M2** camera into Blender | rotation maths pinned by 200+ synthetic cases; camera verified in Blender. Needs the backplate eye-check. |
-| **M3** depth → proxy | ground-plane recovery within 2% on analytic depth; mesh, winding and rigid body verified in Blender. The cube-resting-height acceptance needs a photo and a GPU. |
+| **M1** EXIF solve | **passes on the real `IMG_7096.HEIC`**: pitch 3.279°, roll 0.715°, heading 76.944°, 14 mm, zero warnings. Four-orientation set agrees within 0.25°. |
+| **M2** camera into Blender | rotation maths pinned by 200+ synthetic cases and re-checked against the real solve; camera verified inside Blender. Needs the backplate eye-check. |
+| **M3** depth → proxy | ground-plane recovery within 2% on analytic depth; mesh, winding and rigid body verified in Blender. The cube-resting-height acceptance needs Depth Pro weights and a GPU. |
 | **M4** shadow proxy + compositor | node graph asserted, including Window coords and the Alpha Over order. Chrome-sphere check needs a render. |
-| **M5** bounce proxy | ray-visibility split asserted both ways; strength calibration tested; A/B toggle built for the double-counting check. Needs the white-sphere render. |
-| **M6** DNG lighting plate | implemented, opcode reporting tested. `WarpRectilinear` is **not** applied — see `docs/DECISIONS.md` §1. Needs a real DNG. |
+| **M5** bounce proxy | ray-visibility split asserted both ways; strength calibration tested; A/B toggle built for the double-counting check. Now driven by the linear EXR when there is one. Needs the white-sphere render. |
+| **M6** DNG lighting plate | **works on the real `IMG_7263.DNG`** — linear EXR, max 2.890 against a median of 0.210, 0.52% of pixels above diffuse white. Required a decoder change; see below. |
 | **M7** shadow extraction + gobo | intrinsic decomposition with a tested fallback; the bake is now exception-safe, verified by simulating a mid-render failure. |
+
+### Two things the real files changed
+
+**LibRaw cannot read this camera's ProRAW.** `IMG_7263.DNG` is DNG 1.7 with
+JPEG XL compression, and rawpy/LibRaw 0.22 rejects it outright — so the
+blueprint's `rawpy → EXR` path fails at the first call. macOS **Core Image** is
+tried first now: `CIRAWFilter` with `boostAmount = 0` gives linear data with the
+headroom intact, offline, using Apple's own decoder. rawpy stays as the
+portable fallback. Install `pyobjc-framework-Quartz` for it.
+
+**`WarpRectilinear` was never a problem here.** The DNG is
+`PhotometricInterpretation: Linear Raw` with no opcode tags at all — Apple
+rectified it before writing the file. `docs/DECISIONS.md` §1 has the evidence;
+the detection code stays because other cameras may differ.
 
 ## Verified against Blender 5.2 LTS
 

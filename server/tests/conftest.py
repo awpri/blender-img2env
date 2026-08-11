@@ -35,6 +35,14 @@ def img7096() -> dict:
 
 
 @pytest.fixture
+def img7263_dng() -> dict:
+    """A real Apple ProRAW dump: DNG 1.7, Linear Raw, with a semantic-mask
+    SubIFD1 alongside the full-resolution SubIFD. Kept as a fixture so CI
+    exercises that tag layout without needing the 60 MB file."""
+    return load_fixture("img7263_dng_exif.json")
+
+
+@pytest.fixture
 def geneva() -> dict:
     """Same camera, but with coordinates, so the ephemeris path runs."""
     return load_fixture("sunny_geneva_exif.json")

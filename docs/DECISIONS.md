@@ -5,33 +5,80 @@ the choice. The handoff asked for several of these explicitly.
 
 ---
 
-## 1. DNG `WarpRectilinear` opcodes are NOT applied
+## 1. `WarpRectilinear` turned out to be a non-issue on this camera
 
-**Decision: accept the distortion. Document it. Do not correct it in the solver.**
+**Original concern:** a ProRAW DNG defers Apple's lens rectification to a
+`WarpRectilinear` opcode that LibRaw does not apply, so moving to DNG for the
+highlight headroom might reintroduce barrel distortion the JPEG had removed.
 
-Apple's ISP rectifies the processed JPEG. A ProRAW DNG defers that to a
-`WarpRectilinear` opcode in `OpcodeList3`, and LibRaw/rawpy do not apply it. So
-moving to DNG for the highlight headroom can reintroduce barrel distortion that
-the JPEG had already removed — on a 14 mm ultra-wide that is several pixels at
-the frame corners.
+**Finding, from the real file:** `IMG_7263.DNG` (iPhone 17 Pro, ultra-wide)
+carries **no opcode tags at all**. Its main image is
+`PhotometricInterpretation: Linear Raw` — already demosaiced and already
+geometrically corrected. Apple did the rectification before writing the file,
+which is exactly why there is nothing left to defer.
 
-Why accept it:
+```
+$ exiftool -a -u -G1 '-Opcode*' IMG_7263.DNG
+(nothing)
+$ exiftool -G1 -PhotometricInterpretation IMG_7263.DNG
+[SubIFD]  Photometric Interpretation : Linear Raw
+```
 
-- The lighting plate is integrated over solid angle. A few pixels of edge
-  distortion changes nothing about how much green a patch of grass emits.
-- The display plate for a DNG source comes out of the same undistorted develop,
-  so the plate and the CG agree *with each other*, which is what a composite
-  needs. The error is against reality, not between layers.
-- Applying the opcodes properly means implementing the DNG spec's warp model.
-  That is a real piece of work to fix an error that is invisible on the terrain
-  this pipeline is aimed at.
+So there is no distortion to accept and no correction to apply. **Decision:
+unchanged in effect — do not implement opcode application** — but the reasoning
+is now "there are none" rather than "we tolerate them".
 
-What to do if it bites — a long straight edge near a frame border is the case:
-the compositor's Lens Distortion node, or solve `k1` once. It is a fixed lens,
-so one coefficient solved once is good forever.
+`server/raw.py:warp_opcodes()` still detects and reports them, because other
+cameras and future firmware may well write them, and a silent geometry change
+is the worst way to find that out.
+`test_real_photos.py::test_this_dng_carries_no_warp_opcodes` pins the finding
+so the claim above is not taken on trust.
 
-`server/raw.py:warp_opcodes()` detects and reports the opcodes so the situation
-is stated rather than discovered. `test_raw.py` pins the reporting.
+If a long straight edge near a frame border ever does bow: the compositor's
+Lens Distortion node, or solve `k1` once. It is a fixed lens, so one
+coefficient is good forever.
+
+---
+
+## 1b. LibRaw cannot read this camera's ProRAW; Core Image can
+
+This is the real M6 problem, and it is not the one the blueprint anticipated.
+
+```
+rawpy 0.27.0 / LibRaw 0.22.1 on IMG_7263.DNG
+  -> LibRawFileUnsupportedError: 'Unsupported file format or not RAW file'
+```
+
+The file is **DNG 1.7 with JPEG XL compression**. LibRaw 0.22 does not support
+it, so the entire `rawpy → linear EXR` path in the blueprint fails at the first
+call on the target camera.
+
+**Decision: try Apple's own decoder first on macOS, keep rawpy as the portable
+fallback.** `CIRAWFilter` with `boostAmount = 0` disables the tone curve and
+returns linear extended-range data — it is the same decoder Photos uses, it is
+offline, and it needs no extra download beyond `pyobjc-framework-Quartz`.
+
+Measured on `IMG_7263.DNG`:
+
+| | value |
+|---|---|
+| max | 2.890 |
+| median | 0.210 |
+| pixels above 1.0 | 0.52% |
+| pixels above 2.0 | 0.063% |
+
+That is real headroom, and it is the whole justification for the DNG path: a
+display-referred plate clips all of it, and the clipped regions carry most of
+the scene's light energy.
+
+Ordering is Core Image → rawpy on macOS, because on the target camera the
+portable decoder is precisely the one that does not work. If neither can read
+the file, the error names all three routes out, including the free Adobe DNG
+Converter.
+
+The lighting plate is developed at a 2048 px long edge by default. Lighting is
+low-frequency — the first diffuse bounce blurs it anyway — and a full 48 MP
+float32 RGBA buffer is ~780 MB of unified memory for no visible gain.
 
 ---
 

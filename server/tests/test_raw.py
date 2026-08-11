@@ -167,28 +167,46 @@ def test_cache_directory_is_created(tmp_path):
 
 
 def test_missing_rawpy_is_an_actionable_error(tmp_path, monkeypatch):
-    import builtins
-    real_import = builtins.__import__
+    """The backend helpers raise their own errors; develop_linear is what turns
+    the whole chain into one message a user can act on."""
+    monkeypatch.setattr(raw_mod.sys, "platform", "linux")   # skip the Core Image branch
 
-    def no_rawpy(name, *args, **kwargs):
-        if name == "rawpy":
-            raise ImportError("nope")
-        return real_import(name, *args, **kwargs)
+    def no_rawpy(*_args, **_kwargs):
+        raise ImportError("No module named 'rawpy'")
 
-    monkeypatch.setattr(builtins, "__import__", no_rawpy)
+    monkeypatch.setattr(raw_mod, "_develop_linear_rawpy", no_rawpy)
     with pytest.raises(raw_mod.PlateError, match="pip install rawpy"):
         raw_mod.develop_linear(tmp_path / "whatever.dng")
 
 
-# ---------------------------------------------------------------------------
-# with a real raw file, if one is available
-# ---------------------------------------------------------------------------
+def test_no_decoder_error_names_every_route_out(tmp_path, monkeypatch):
+    """When nothing can read the file, the message has to carry all three ways
+    forward — Core Image, rawpy, or Adobe DNG Converter — because on a DNG 1.7
+    file the obvious one (rawpy) is precisely the one that does not work.
+    """
+    def fails(*_args, **_kwargs):
+        raise RuntimeError("Unsupported file format or not RAW file")
 
-@pytest.mark.skipif(True, reason="needs a real ProRAW DNG; see docs/VERIFICATION.md")
-def test_linear_develop_has_headroom():
-    """Run this by hand against IMG_7096.DNG with the skipif removed. A linear
-    develop of a sunlit scene should show a max well above the median — if it
-    does not, no_auto_bright or gamma is being ignored and the lighting plate
-    is no better than the JPEG."""
-    linear = raw_mod.develop_linear("IMG_7096.DNG")
-    assert linear.max() / np.median(linear) > 4.0
+    monkeypatch.setattr(raw_mod, "_develop_linear_coreimage", fails)
+    monkeypatch.setattr(raw_mod, "_develop_linear_rawpy", fails)
+
+    with pytest.raises(raw_mod.PlateError) as caught:
+        raw_mod.develop_linear(tmp_path / "IMG_7263.DNG")
+    message = str(caught.value)
+    assert "JPEG XL" in message
+    assert "pyobjc-framework-Quartz" in message
+    assert "Adobe DNG Converter" in message
+
+
+def test_linear_develop_prefers_core_image_on_macos(tmp_path, monkeypatch):
+    """Ordering matters: LibRaw cannot read the target camera's ProRAW at all,
+    so Apple's decoder has to be tried first rather than as a fallback."""
+    calls = []
+    monkeypatch.setattr(raw_mod.sys, "platform", "darwin")
+    monkeypatch.setattr(raw_mod, "_develop_linear_coreimage",
+                        lambda *a, **k: calls.append("coreimage") or np.zeros((2, 2, 3), np.float32))
+    monkeypatch.setattr(raw_mod, "_develop_linear_rawpy",
+                        lambda *a, **k: calls.append("rawpy") or np.zeros((2, 2, 3), np.float32))
+
+    raw_mod.develop_linear(tmp_path / "x.dng")
+    assert calls == ["coreimage"]

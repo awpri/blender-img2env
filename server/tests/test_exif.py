@@ -68,6 +68,38 @@ def test_focal_conventions_differ_by_a_few_percent(img7096):
     assert long_edge.width == diagonal.width
 
 
+def test_dng_tag_layout_resolves_to_the_full_resolution_raw(img7263_dng):
+    """An Apple ProRAW DNG carries the same tag name at three resolutions:
+    IFD0 (a reduced-resolution preview), SubIFD (the 8064px Linear Raw) and
+    SubIFD1 (a 2016px semantic mask). Picking the mask would scale the entire
+    solve by a third, and it would look like bad depth rather than a bad
+    lookup."""
+    assert exif_mod.stored_image_size(img7263_dng) == (8064, 6048)
+
+    intrinsics = exif_mod.intrinsics_from_exif(img7263_dng)
+    assert (intrinsics.width, intrinsics.height) == (6048, 8064)
+    assert intrinsics.fx == pytest.approx(14.0 / 36.0 * 8064)
+
+
+def test_dng_solves_to_a_near_level_camera(img7263_dng):
+    state = exif_mod.camera_state_from_exif(img7263_dng)
+    assert abs(state.orientation.pitch_deg) < 2.0
+    assert abs(state.orientation.roll_deg) < 2.0
+    assert state.geo.heading_deg == pytest.approx(94.34, abs=0.01)
+    assert state.warnings == [], "an unmodified original should solve clean"
+
+
+def test_group_matching_respects_boundaries():
+    """EXIF:SubIFD1 must not satisfy a request for EXIF:SubIFD."""
+    assert exif_mod._group_matches("EXIF:SubIFD:ImageWidth", "EXIF:SubIFD")
+    assert not exif_mod._group_matches("EXIF:SubIFD1:ImageWidth", "EXIF:SubIFD")
+    assert exif_mod._group_matches("Composite:ImageSize", "Composite")
+    assert not exif_mod._group_matches("CompositeExtra:ImageSize", "Composite")
+
+    record = {"EXIF:SubIFD1:ImageWidth": 2016, "EXIF:SubIFD:ImageWidth": 8064}
+    assert exif_mod.find(record, "ImageWidth", prefer=("EXIF:SubIFD",)) == 8064
+
+
 def test_focal_override_wins(img7096):
     k = exif_mod.intrinsics_from_exif(img7096, focal_override=24.0)
     assert k.focal_35mm == pytest.approx(24.0)
@@ -152,11 +184,31 @@ def test_acceleration_vector_accepts_a_json_list(img7096):
 # GPS, time, sun
 # ---------------------------------------------------------------------------
 
-def test_stripped_coordinates_produce_the_specific_warning(img7096):
-    """The reference photo has GPSLatitudeRef with no GPSLatitude. That exact
-    shape means 'Photos stripped the location on export', and the message has
-    to say so, because the fix is in the export dialog, not in this code."""
+def test_reference_photo_kept_its_coordinates(img7096):
+    """The unmodified original has location, so the solar half of the pipeline
+    works. LIGHTING_ADDENDUM.md was written against a JPEG re-export that had
+    lost it; this is the original, and it did not."""
     geo = exif_mod.geo_from_exif(img7096)
+    assert geo.latitude == pytest.approx(46.5005, abs=0.001)
+    assert geo.longitude == pytest.approx(7.7141, abs=0.001)
+    assert geo.altitude_m == pytest.approx(1659, abs=1)
+    assert exif_mod.sun_from_geo(geo) is not None
+
+
+def test_stripped_coordinates_produce_the_specific_warning(img7096):
+    """A Photos export with location unticked keeps GPSLatitudeRef ("N") and
+    drops the coordinate it refers to. That exact shape has to be named,
+    because the fix is in the export dialog rather than in this code.
+
+    Built by stripping the real fixture rather than by keeping a hand-made one,
+    so it stays honest about what a real file looks like on either side.
+    """
+    stripped = {k: v for k, v in img7096.items()
+                if k.split(":")[-1] not in ("GPSLatitude", "GPSLongitude",
+                                            "GPSPosition", "GPSCoordinates")}
+    assert any(k.endswith("GPSLatitudeRef") for k in stripped), "the Ref must survive"
+
+    geo = exif_mod.geo_from_exif(stripped)
     assert geo.latitude is None
     assert any("Export Unmodified Original" in w for w in geo.warnings)
     assert exif_mod.sun_from_geo(geo) is None
@@ -208,8 +260,8 @@ def test_full_state_serialises(img7096):
     payload = exif_mod.camera_state_from_exif(img7096).as_dict()
     json.dumps(payload)
     assert payload["pitch_deg"] == pytest.approx(3.28, abs=0.05)
-    assert payload["heading_deg"] == pytest.approx(76.944)
-    assert payload["sun"] is None
+    assert payload["heading_deg"] == pytest.approx(76.944, abs=0.001)
+    assert payload["sun"]["above_horizon"] is True
 
 
 # ---------------------------------------------------------------------------

@@ -64,12 +64,26 @@ def load_exif_json(path: str | Path) -> dict:
     return data[0] if isinstance(data, list) else data
 
 
+def _group_matches(key: str, group: str) -> bool:
+    """Whether an exiftool key belongs to a group, on group boundaries.
+
+    A plain startswith is wrong and quietly so: an Apple ProRAW DNG has both
+    `EXIF:SubIFD:ImageWidth` (8064, the full-resolution raw) and
+    `EXIF:SubIFD1:ImageWidth` (2016, a semantic mask), and "EXIF:SubIFD1"
+    starts with "EXIF:SubIFD". Whichever landed first in the dict would win,
+    and a solve scaled to a 2016 px mask looks like bad depth rather than a
+    bad lookup.
+    """
+    return key == group or key.startswith(group + ":")
+
+
 def find(exif: dict, *names: str, prefer: tuple[str, ...] = ()):
     """Look a tag up by its bare name across all groups.
 
-    `prefer` is an ordered list of group prefixes to try first. It matters more
-    than it looks: in a DNG, IFD0 describes the embedded thumbnail while the
-    real image is in a SubIFD, so an unqualified ImageWidth can be 256 px.
+    `prefer` is an ordered list of groups to try first. It matters more than it
+    looks: a DNG carries the same tag name at several resolutions — the
+    full-resolution raw, a reduced-resolution preview, and a semantic mask —
+    and picking the wrong one rescales the entire solve.
     """
     matches: list[tuple[str, object]] = []
     for key, value in exif.items():
@@ -79,7 +93,7 @@ def find(exif: dict, *names: str, prefer: tuple[str, ...] = ()):
         return None
     for group in prefer:
         for key, value in matches:
-            if key.startswith(group):
+            if _group_matches(key, group):
                 return value
     return matches[0][1]
 

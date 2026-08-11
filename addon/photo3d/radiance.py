@@ -45,6 +45,29 @@ def find_plate(obj) -> bpy.types.Image | None:
     return None
 
 
+def emitter_image(props, fallback):
+    """The image the bounce proxy should emit from.
+
+    The linear EXR when there is one, the display PNG otherwise. This is the
+    whole payoff of the DNG path: a display-referred plate clips everything
+    brighter than diffuse white, and those clipped regions carry most of the
+    light energy in the scene, so a bounce driven by the PNG systematically
+    under-reads the sky and renders flat, grey CG. The EXR keeps the
+    highlights — measured at 2.89 against a median of 0.21 on IMG_7263.
+
+    Returns (image, is_linear) so the caller can tell the user which it got.
+    """
+    path = bpy.path.abspath(props.lighting_exr) if props.lighting_exr else ""
+    if path and os.path.exists(path):
+        image = bpy.data.images.load(path, check_existing=True)
+        # EXR is scene-linear by definition; say so rather than trusting the
+        # colour management guess, which reads the extension and can be wrong
+        # if the file was renamed.
+        image.colorspace_settings.name = "Linear Rec.709"
+        return image, True
+    return fallback, False
+
+
 def image_to_array(image: bpy.types.Image, long_edge: int) -> np.ndarray:
     """Downsampled RGB float array from a Blender image.
 
@@ -140,6 +163,7 @@ class PHOTO3D_OT_bounce_proxy(bpy.types.Operator):
         if existing is not None:
             bpy.data.objects.remove(existing, do_unlink=True)
 
+        emitter, is_linear = emitter_image(props, plate)
         bounce = source.copy()
         bounce.data = source.data.copy()
         bounce.name = bounce.data.name = "Photo3D_Bounce"
@@ -147,7 +171,7 @@ class PHOTO3D_OT_bounce_proxy(bpy.types.Operator):
         bounce.matrix_world = source.matrix_world
         bounce.data.materials.clear()
         bounce.data.materials.append(
-            make_bounce_material(plate, props.bounce_strength, props.bounce_saturation))
+            make_bounce_material(emitter, props.bounce_strength, props.bounce_saturation))
 
         # The split that stops anything being counted twice:
         #
@@ -168,7 +192,11 @@ class PHOTO3D_OT_bounce_proxy(bpy.types.Operator):
         source.visible_glossy = False
         source.visible_transmission = False
 
-        self.report({"INFO"}, "bounce proxy built; shadow proxy demoted to matte only")
+        origin = ("linear EXR lighting plate, highlights intact"
+                  if is_linear else
+                  "display-referred plate — highlights are clipped, so the sky "
+                  "will under-read. Shoot ProRAW for the lighting plate")
+        self.report({"INFO"}, f"bounce proxy built from the {origin}")
         return {"FINISHED"}
 
 
@@ -215,7 +243,10 @@ class PHOTO3D_OT_calibrate_bounce(bpy.types.Operator):
             self.report({"ERROR"}, "no plate found; solve first")
             return {"CANCELLED"}
 
-        pixels = image_to_array(plate, 256)
+        # Calibrate against whatever the bounce actually emits from, or the
+        # number will be right for an image the emitter is not using.
+        emitter, is_linear = emitter_image(props, plate)
+        pixels = image_to_array(emitter, 256)
         # Blender hands back scene-linear values already, so no sRGB decode.
         sun = bpy.data.lights.get("Photo3D_Sun")
         irradiance = (sun.energy if sun else 3.0) + props.sky_irradiance_guess
@@ -228,7 +259,8 @@ class PHOTO3D_OT_calibrate_bounce(bpy.types.Operator):
                 if node.type == "EMISSION":
                     node.inputs["Strength"].default_value = props.bounce_strength
 
-        self.report({"INFO"}, f"strength = {props.bounce_strength:.2f} "
+        self.report({"INFO"}, f"strength = {props.bounce_strength:.2f} from the "
+                              f"{'linear' if is_linear else 'display-referred'} plate "
                               f"(irradiance {irradiance:.1f}, albedo {props.assumed_albedo:.2f})")
         return {"FINISHED"}
 
