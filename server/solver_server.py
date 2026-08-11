@@ -78,13 +78,21 @@ def _resolve(image_path: str) -> Path:
 
 @app.get("/health")
 def health():
-    """Cheap enough for the add-on to poll before it bothers the user."""
+    """Cheap enough for the add-on to poll before it bothers the user.
+
+    Reports the checkpoint too: "is torch alive" and "can I actually run depth"
+    are different questions, and the second one is the one that fails first.
+    """
     try:
         device = str(depth_mod.torch_device())
     except Exception:                                             # noqa: BLE001
         device = "torch unavailable (metadata-only solves will still work)"
+    checkpoint = depth_mod.find_checkpoint()
     return {"ok": True, "version": __version__, "device": device,
-            "models_resident": depth_mod.loaded_models(), "cache": str(CACHE)}
+            "models_resident": depth_mod.loaded_models(),
+            "depth_pro_checkpoint": checkpoint or "NOT FOUND — run get_pretrained_models.sh",
+            "depth_available": checkpoint is not None,
+            "cache": str(CACHE)}
 
 
 @app.post("/solve")

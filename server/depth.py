@@ -59,6 +59,33 @@ def loaded_models() -> list[str]:
 # Depth Pro
 # ---------------------------------------------------------------------------
 
+#: Where the 1.9 GB checkpoint might be. Depth Pro's default config points at
+#: "./checkpoints/depth_pro.pt" — relative to the *current working directory* —
+#: so a daemon started from the repo root looks in the repo root and finds
+#: nothing, while get_pretrained_models.sh has put the file next to the cloned
+#: source. That mismatch is the first thing anyone hits, and the resulting
+#: error does not say what is wrong, so resolve it here instead.
+CHECKPOINT_CANDIDATES = (
+    "~/src/ml-depth-pro/checkpoints/depth_pro.pt",
+    "./checkpoints/depth_pro.pt",
+    "~/.cache/photo3d/checkpoints/depth_pro.pt",
+    "~/ml-depth-pro/checkpoints/depth_pro.pt",
+)
+
+
+def find_checkpoint() -> str | None:
+    """Locate depth_pro.pt, honouring PHOTO3D_DEPTH_PRO_CHECKPOINT first."""
+    override = os.environ.get("PHOTO3D_DEPTH_PRO_CHECKPOINT")
+    if override:
+        path = os.path.expanduser(override)
+        return path if os.path.exists(path) else None
+    for candidate in CHECKPOINT_CANDIDATES:
+        path = os.path.expanduser(candidate)
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def get_depth_pro():
     if "depth_pro" not in _MODELS:
         try:
@@ -66,9 +93,26 @@ def get_depth_pro():
         except ImportError:
             raise RuntimeError(
                 "Depth Pro is not installed. In the solver venv:\n"
-                "  pip install git+https://github.com/apple/ml-depth-pro.git\n"
-                "then fetch the weights with get_pretrained_models.sh") from None
-        model, transform = depth_pro.create_model_and_transforms(device=torch_device())
+                "  pip install git+https://github.com/apple/ml-depth-pro.git") from None
+
+        checkpoint = find_checkpoint()
+        if checkpoint is None:
+            searched = "\n  ".join(os.path.expanduser(c) for c in CHECKPOINT_CANDIDATES)
+            raise RuntimeError(
+                "Depth Pro is installed but its weights are missing. Fetch them:\n"
+                "  git clone https://github.com/apple/ml-depth-pro.git ~/src/ml-depth-pro\n"
+                "  cd ~/src/ml-depth-pro && source get_pretrained_models.sh\n\n"
+                f"Looked in:\n  {searched}\n\n"
+                "Set PHOTO3D_DEPTH_PRO_CHECKPOINT to point somewhere else.")
+
+        # Copy the default config and redirect it at the checkpoint we found,
+        # rather than depending on the daemon's working directory.
+        from depth_pro.depth_pro import DEFAULT_MONODEPTH_CONFIG_DICT
+        import dataclasses
+        config = dataclasses.replace(DEFAULT_MONODEPTH_CONFIG_DICT,
+                                     checkpoint_uri=checkpoint)
+        model, transform = depth_pro.create_model_and_transforms(
+            config=config, device=torch_device())
         model.eval()
         _MODELS["depth_pro"] = (model, transform)
     return _MODELS["depth_pro"]

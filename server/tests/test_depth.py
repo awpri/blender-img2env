@@ -246,6 +246,29 @@ def test_clamp_far_field_removes_non_finite_values():
     assert clean.max() <= 120.0 and clean.min() >= 0.05
 
 
+def test_checkpoint_env_override_wins(tmp_path, monkeypatch):
+    """Depth Pro's default config points at ./checkpoints/depth_pro.pt, relative
+    to the working directory, so a daemon started from the repo root looks in
+    the wrong place and fails with an error that does not say why."""
+    weights = tmp_path / "depth_pro.pt"
+    weights.write_bytes(b"not really 1.9GB")
+    monkeypatch.setenv("PHOTO3D_DEPTH_PRO_CHECKPOINT", str(weights))
+    assert depth_mod.find_checkpoint() == str(weights)
+
+
+def test_checkpoint_override_pointing_nowhere_is_not_silently_ignored(monkeypatch):
+    monkeypatch.setenv("PHOTO3D_DEPTH_PRO_CHECKPOINT", "/nope/depth_pro.pt")
+    assert depth_mod.find_checkpoint() is None
+
+
+def test_missing_weights_error_says_how_to_get_them(monkeypatch):
+    pytest.importorskip("depth_pro", reason="Depth Pro not installed")
+    monkeypatch.setattr(depth_mod, "find_checkpoint", lambda: None)
+    depth_mod._MODELS.pop("depth_pro", None)
+    with pytest.raises(RuntimeError, match="get_pretrained_models"):
+        depth_mod.get_depth_pro()
+
+
 def test_depth_statistics_ignores_non_finite():
     stats = depth_mod.depth_statistics(np.array([1.0, 2.0, np.nan, 100.0], np.float32))
     assert stats["min_m"] == 1.0

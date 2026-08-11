@@ -68,31 +68,43 @@ mechanically, and the zip builder refuses to package a violation.
 
 ## Setup
 
+Run everything from the repository root — the paths below are relative to it.
+
 ```bash
-make venv          # solver venv at ~/.venvs/photo3d with everything installed
-make test          # 450+ tests, ~1 second
-make addon         # photo3d.zip → Blender ▸ Preferences ▸ Add-ons ▸ Install from Disk
-make serve         # daemon on 127.0.0.1:8765
+brew install exiftool          # the only thing that reads Apple's MakerNote
+make venv                      # ~/.venvs/photo3d + torch + Depth Pro
+make weights                   # the 1.9 GB checkpoint
+make addon                     # photo3d.zip for Blender
 ```
 
-Two git-only dependencies the venv target cannot install for you:
+`make venv` picks Python 3.12 or 3.11 if either is present, because that is
+what the ML stack is tested against. Override with `make venv PYTHON=python3.14`.
+
+Optional, only needed for the M7 sun gobo:
 
 ```bash
-~/.venvs/photo3d/bin/pip install git+https://github.com/apple/ml-depth-pro.git
 ~/.venvs/photo3d/bin/pip install git+https://github.com/compphoto/Intrinsic.git
 ```
 
-Then fetch Depth Pro's weights with its `get_pretrained_models.sh` (~1.9 GB),
-and `brew install exiftool` — it is the only thing that reads Apple's MakerNote.
+### Daily use
 
-Everything must be run from the repository root; the paths in these commands
-and in `docs/VERIFICATION.md` are relative to it.
+Leave the daemon running in its own terminal — the models stay resident in that
+process, and a cold reload per photo is exactly what it exists to avoid.
 
-In Blender: **N-panel ▸ Photo3D**, pick a photo, **Solve Photo**. First solve
-~15 s while weights load; every one after ~1–3 s.
+```bash
+make serve                     # foreground, on 127.0.0.1:8765
+make health                    # in another terminal: what is loaded?
+```
 
-`Solve Camera Only` skips depth entirely and needs no models at all — useful
-for checking the camera before committing to a full solve.
+Then in Blender: **press N** in the 3D viewport, choose the **Photo3D** tab,
+set **Photo** to your file, and press **Solve Photo**. First solve ~15 s while
+the weights load; every one after ~1–3 s.
+
+**Solve Camera Only** skips depth entirely and needs no models or weights at
+all — the fastest way to check the camera before committing to a full solve.
+
+The add-on installs via **Edit ▸ Preferences ▸ Add-ons ▸ Install from Disk**,
+pointed at the `photo3d.zip` that `make addon` writes.
 
 ---
 
