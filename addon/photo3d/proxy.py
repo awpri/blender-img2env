@@ -214,6 +214,66 @@ class PHOTO3D_OT_rebuild_proxy(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PHOTO3D_OT_add_ground_plane(bpy.types.Operator):
+    """A true level ground plane from measured gravity — no depth model involved"""
+    bl_idname = "photo3d.add_ground_plane"
+    bl_label = "Add Ground Plane"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return bpy.data.objects.get("Photo3D_Cam") is not None
+
+    def execute(self, context):
+        # Why this exists, and why it is exact where the depth mesh is not:
+        #
+        # The camera rotation was built so that world +Z is true up, because the
+        # accelerometer measured gravity. So the plane z = 0 is genuinely level
+        # — not level according to a depth model, level according to hardware.
+        # The ONLY uncertain number is how far below the lens it sits, and that
+        # is one value the user can drag.
+        #
+        # On scenes where monocular metric depth falls apart (ultra-wide, huge
+        # depth range) this is the reliable way to place and land objects: the
+        # depth mesh keeps doing occlusion and shadow-catching, where relative
+        # ordering is all that matters, and the plane does the standing-on.
+        props = context.scene.photo3d
+        existing = bpy.data.objects.get("Photo3D_Ground")
+        if existing is not None:
+            bpy.data.objects.remove(existing, do_unlink=True)
+
+        bpy.ops.mesh.primitive_plane_add(size=props.ground_plane_size,
+                                         location=(0.0, 0.0, 0.0))
+        plane = context.active_object
+        plane.name = "Photo3D_Ground"
+
+        plate = None
+        proxy_obj = bpy.data.objects.get("Photo3D_Proxy")
+        if proxy_obj is not None:
+            for slot in proxy_obj.material_slots:
+                if slot.material:
+                    plane.data.materials.append(slot.material)
+                    plate = slot.material
+                    break
+        if plate is None and props.plate_png:
+            image = bpy.data.images.load(props.plate_png, check_existing=True)
+            plane.data.materials.append(make_proxy_material(image))
+
+        plane.is_shadow_catcher = True
+        plane.visible_camera = True
+        plane.visible_shadow = True
+        plane.display_type = "WIRE"
+        add_passive_collider(context, plane)
+
+        camera = bpy.data.objects.get("Photo3D_Cam")
+        height = camera.matrix_world.translation.z if camera else 0.0
+        self.report({"INFO"},
+                    f"level ground at z=0, camera {height:.2f} m above it. Move the "
+                    "plane in Z to set the scale — its orientation is measured, "
+                    "only the height is a choice")
+        return {"FINISHED"}
+
+
 class PHOTO3D_OT_crispify(bpy.types.Operator):
     """Force every image texture on the selected objects to nearest-neighbour"""
     bl_idname = "photo3d.crispify"
@@ -283,7 +343,8 @@ class PHOTO3D_OT_drop_test(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (PHOTO3D_OT_rebuild_proxy, PHOTO3D_OT_crispify, PHOTO3D_OT_drop_test)
+CLASSES = (PHOTO3D_OT_rebuild_proxy, PHOTO3D_OT_add_ground_plane, PHOTO3D_OT_crispify,
+           PHOTO3D_OT_drop_test)
 
 
 def register():

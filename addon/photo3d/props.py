@@ -67,6 +67,12 @@ class Photo3DProps(bpy.types.PropertyGroup):
                     "has a lot of scene out there. Nothing collides with a peak "
                     "4km away")
     collision_smooth: FloatProperty(name="Collider smoothing", default=0.3, min=0.0, max=1.0)
+    ground_plane_size: FloatProperty(
+        name="Ground plane size (m)", default=200.0, min=1.0,
+        description="A level plane at z=0. Its orientation comes from measured "
+                    "gravity, so it is exact; only its distance below the lens "
+                    "is a choice. Use it to stand objects on when the depth "
+                    "mesh is unreliable — big landscapes, cluttered scenes")
 
     # --- camera ----------------------------------------------------------
     use_heading: BoolProperty(

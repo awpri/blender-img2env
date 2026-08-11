@@ -246,7 +246,7 @@ def ensure_rigidbody_world(context):
 def _clear_previous(scene):
     """Remove the objects a previous solve made, so re-solving is idempotent."""
     for name in ("Photo3D_Cam", "Photo3D_Proxy", "Photo3D_Bounce", "Photo3D_Sun",
-                 "Photo3D_Gobo", "Photo3D_GoboCam"):
+                 "Photo3D_Gobo", "Photo3D_GoboCam", "Photo3D_Ground"):
         existing = bpy.data.objects.get(name)
         if existing is not None:
             bpy.data.objects.remove(existing, do_unlink=True)

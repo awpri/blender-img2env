@@ -121,6 +121,50 @@ untouched and only the CG needs to be matched to it.
 
 ---
 
+## 3b. Marigold does not rescue the hard scenes; the ground plane does
+
+Tested, because "absolute scale does not matter, I will rescale by hand" is
+only true if the *shape* is right. A uniform scale error can be undone in
+Blender. A shape error cannot.
+
+The test: fit an affine model — exactly the ambiguity Marigold has — using two
+independent constraints, the visible ground being a plane perpendicular to
+measured gravity, and a person of known pixel height being 1.75 m. If the two
+agree, the geometry is self-consistent and rescaling works. Consistency of 1.00
+means they agree.
+
+| | alpine, 14 mm | station, 24 mm |
+|---|---|---|
+| Depth Pro, affine-fitted in disparity | **2.62** | 0.79 |
+| Marigold, affine in depth | **2.40** | 0.89 |
+| Marigold, affine in disparity | **2.42** | degenerate |
+
+Marigold lands within a few percent of Depth Pro on the scene that matters.
+The alpine failure is not the affine ambiguity — it is that the *relative*
+geometry is wrong, and no two-parameter fit repairs that. Marigold also cannot
+be used alone for placement, because affine-invariance means an unknown offset
+as well as an unknown scale, and a wrong offset warps the scene: flat ground
+becomes curved, and that warp does not come out with a scale slider.
+
+**Decision: keep Depth Pro as the backbone; do not promote Marigold. For scenes
+where metric depth is unreliable, place objects on a gravity-derived ground
+plane instead of on the depth mesh.**
+
+The plane is the good answer because the camera rotation was built so that
+world +Z is truly up — measured by the accelerometer, not inferred. So `z = 0` is
+genuinely level, and the only uncertain quantity is how far below the lens it
+sits: one number, which the user can drag, and which sets the scene's scale.
+
+The depth mesh keeps doing what it is reliably good at even when distorted —
+occlusion and shadow catching, where relative ordering is what matters — while
+the plane does the standing-on. That splits the problem along the line where
+the accuracy actually falls.
+
+`Proxy Geometry ▸ Add Ground Plane`. The smoke test asserts its normal is
+exactly +Z whatever the camera was doing.
+
+---
+
 ## 4. Roll is positive when world-up leans right in the image
 
 The sign of roll is a free choice; both conventions exist. Pinned so that the

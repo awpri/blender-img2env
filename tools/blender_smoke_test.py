@@ -285,6 +285,26 @@ def main() -> int:
             .node_tree.nodes if n.type == "TEX_IMAGE")
         assert plate_texture.interpolation == "Cubic", "the plate wants smoothing"
 
+    @check("ground plane is level by construction and collidable")
+    def _():
+        """The plane's orientation comes from measured gravity rather than from
+        a depth model, so it must be exactly level whatever the camera was
+        doing — that is the whole reason it is trustworthy on scenes where the
+        depth mesh is not."""
+        from mathutils import Vector
+        assert bpy.ops.photo3d.add_ground_plane() == {"FINISHED"}
+        plane = bpy.data.objects["Photo3D_Ground"]
+
+        normal = plane.matrix_world.to_quaternion() @ Vector((0.0, 0.0, 1.0))
+        assert abs(normal.z - 1.0) < 1e-6, f"ground is not level: normal {tuple(normal)}"
+        assert abs(plane.matrix_world.translation.z) < 1e-9, "ground must sit at z=0"
+        assert plane.rigid_body is not None and plane.rigid_body.type == "PASSIVE"
+        assert plane.is_shadow_catcher
+        assert plane.material_slots and plane.material_slots[0].material is not None
+
+        # the camera has to be above it, or objects drop out of frame
+        assert bpy.data.objects["Photo3D_Cam"].matrix_world.translation.z > 0.0
+
     @check("drop test cube is active and above the terrain")
     def _():
         assert bpy.ops.photo3d.drop_test() == {"FINISHED"}

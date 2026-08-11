@@ -128,6 +128,17 @@ class PHOTO3D_PT_proxy(Photo3DPanel, bpy.types.Panel):
             column.label(text="tools/calibrate_scale.py")
 
         self.layout.operator("photo3d.rebuild_proxy", icon="MOD_REMESH")
+
+        box = self.layout.box()
+        box.label(text="Level ground from gravity", icon="MESH_PLANE")
+        column = box.column(align=True)
+        column.scale_y = 0.8
+        column.label(text="Exact orientation, measured — not")
+        column.label(text="from depth. Use it to stand things")
+        column.label(text="on when the mesh is unreliable.")
+        box.prop(props, "ground_plane_size")
+        box.operator("photo3d.add_ground_plane", icon="MESH_PLANE")
+
         self.layout.operator("photo3d.drop_test", icon="PHYSICS")
 
 
