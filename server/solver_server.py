@@ -60,6 +60,17 @@ class SolveRequest(BaseModel):
     skip_depth: bool = Field(False, description="metadata-only solve (milestone M1)")
 
 
+class SegmentRequest(BaseModel):
+    image_path: str
+    long_edge: int = Field(768, ge=256, le=2048,
+                           description="SAM 2 runs on a downscaled plate; masks are "
+                                       "returned in this raster's coordinates")
+    points_per_batch: int = Field(32, ge=4, le=256)
+    min_area_fraction: float = Field(0.002, gt=0.0, lt=1.0)
+    max_regions: int = Field(24, ge=1, le=128)
+    model: str | None = None
+
+
 class ShadowMaskRequest(BaseModel):
     image_path: str
     blur_px: int = Field(41, ge=3, le=501)
@@ -250,6 +261,41 @@ def shadow_mask(req: ShadowMaskRequest):
     except Exception as exc:                                      # noqa: BLE001
         traceback.print_exc()
         raise HTTPException(500, f"shadow mask failed: {exc}") from None
+    return result.__dict__
+
+
+@app.post("/segment")
+def segment(req: SegmentRequest):
+    """SAM 2 masks for splitting the proxy into separate surfaces.
+
+    Returns a label image, not a list of masks: the add-on has to answer "which
+    region is this face in?" for a hundred thousand faces, and one lookup beats
+    N membership tests.
+    """
+    from PIL import Image
+
+    from . import segment as segment_mod
+
+    path = _resolve(req.image_path)
+    image = raw_mod.load_display_image(path)
+    scale = req.long_edge / float(max(image.size))
+    if scale < 1.0:
+        image = image.resize((max(1, round(image.width * scale)),
+                              max(1, round(image.height * scale))), Image.LANCZOS)
+
+    rgb = np.asarray(image, dtype=np.float32) / 255.0
+    try:
+        result = segment_mod.segment(
+            rgb, CACHE, path.stem,
+            model_id=req.model or segment_mod.DEFAULT_MODEL,
+            points_per_batch=req.points_per_batch,
+            min_area_fraction=req.min_area_fraction,
+            max_regions=req.max_regions)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from None
+    except Exception as exc:                                      # noqa: BLE001
+        traceback.print_exc()
+        raise HTTPException(500, f"segmentation failed: {exc}") from None
     return result.__dict__
 
 

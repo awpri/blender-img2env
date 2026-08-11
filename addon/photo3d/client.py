@@ -70,3 +70,8 @@ def solve(payload: dict, timeout: float = 600.0) -> dict:
 
 def shadow_mask(payload: dict, timeout: float = 300.0) -> dict:
     return _request("/shadow_mask", payload, timeout)
+
+
+def segment(payload: dict, timeout: float = 600.0) -> dict:
+    """SAM 2 pays a one-off model load on the first call, like Depth Pro."""
+    return _request("/segment", payload, timeout)

@@ -370,6 +370,8 @@ class PHOTO3D_OT_solve(bpy.types.Operator):
         props.solved_heading = float(solve.get("heading_deg") or 0.0)
         props.solved_height = float(solve.get("camera_height_m") or 0.0)
         props.solved_confidence = float(solve.get("ground_confidence") or 0.0)
+        props.solved_focal = float(solve["intrinsics"]["focal_35mm"])
+        props.solved_sun_azimuth = float((solve.get("sun") or {}).get("azimuth_deg") or 0.0)
         props.solved_orientation_source = (
             "accelerometer" if solve.get("gravity_camera") else "fallback pitch")
         props.solved_warnings = " | ".join(solve.get("warnings", []))

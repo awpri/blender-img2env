@@ -11,9 +11,89 @@ leaving the user to trust a scene they cannot interrogate.
 
 from __future__ import annotations
 
+from math import radians
+
 import bpy
 from bpy.props import (BoolProperty, EnumProperty, FloatProperty, IntProperty,
                        StringProperty)
+
+
+# ---------------------------------------------------------------------------
+# live updates
+# ---------------------------------------------------------------------------
+#
+# These properties used to be read only at solve time, which meant dragging the
+# sun strength slider did nothing at all until you re-solved — and re-solving
+# resets it from the defaults, so it never appeared to work. A light control
+# that does not change the light is worse than no control: it teaches you that
+# the lighting is broken.
+#
+# Each setter below pushes the value into the datablock that actually renders.
+
+def _sun_lamp():
+    lamp = bpy.data.objects.get("Photo3D_Sun")
+    return lamp.data if lamp and lamp.type == "LIGHT" else None
+
+
+def _world_nodes(context):
+    world = context.scene.world
+    return world.node_tree if world and world.use_nodes else None
+
+
+def _update_sun_strength(self, context):
+    lamp = _sun_lamp()
+    if lamp is not None:
+        lamp.energy = self.sun_strength
+
+
+def _update_sky_strength(self, context):
+    tree = _world_nodes(context)
+    for node in (tree.nodes if tree else []):
+        if node.type == "BACKGROUND":
+            node.inputs["Strength"].default_value = self.sky_strength
+
+
+def _update_sky_rotation(self, context):
+    """Re-derive the sky's rotation from the solved azimuth plus the offset.
+
+    The offset is a calibration constant, so it has to be applied to the
+    measured azimuth rather than accumulated onto whatever is already there.
+    """
+    tree = _world_nodes(context)
+    for node in (tree.nodes if tree else []):
+        if node.type == "TEX_SKY":
+            node.sun_rotation = -radians(self.solved_sun_azimuth) + radians(
+                self.sky_rotation_offset)
+
+
+def _bounce_nodes():
+    bounce = bpy.data.objects.get("Photo3D_Bounce")
+    if bounce is None or not bounce.material_slots:
+        return None
+    material = bounce.material_slots[0].material
+    return material.node_tree if material and material.use_nodes else None
+
+
+def _update_bounce_strength(self, context):
+    tree = _bounce_nodes()
+    for node in (tree.nodes if tree else []):
+        if node.type == "EMISSION":
+            node.inputs["Strength"].default_value = self.bounce_strength
+
+
+def _update_bounce_saturation(self, context):
+    tree = _bounce_nodes()
+    for node in (tree.nodes if tree else []):
+        if node.type == "HUE_SAT":
+            node.inputs["Saturation"].default_value = self.bounce_saturation
+
+
+def _update_view_transform(self, context):
+    context.scene.view_settings.view_transform = self.view_transform
+
+
+def _update_render_percent(self, context):
+    context.scene.render.resolution_percentage = self.render_percent
 
 
 class Photo3DProps(bpy.types.PropertyGroup):
@@ -82,17 +162,21 @@ class Photo3DProps(bpy.types.PropertyGroup):
     fallback_pitch: FloatProperty(name="Fallback pitch", default=0.0, min=-89.0, max=89.0)
     fallback_heading: FloatProperty(name="Fallback heading", default=0.0, min=0.0, max=360.0)
     fallback_height: FloatProperty(name="Fallback height (m)", default=1.55, min=0.1)
-    render_percent: IntProperty(name="Render %", default=50, min=5, max=100)
+    render_percent: IntProperty(name="Render %", default=50, min=5, max=100,
+                                update=_update_render_percent)
 
     # --- lighting --------------------------------------------------------
-    sun_strength: FloatProperty(name="Sun strength", default=4.0, min=0.0)
-    sky_strength: FloatProperty(name="Sky strength", default=1.0, min=0.0)
+    sun_strength: FloatProperty(name="Sun strength", default=4.0, min=0.0,
+                                update=_update_sun_strength)
+    sky_strength: FloatProperty(name="Sky strength", default=1.0, min=0.0,
+                                update=_update_sky_strength)
     sky_rotation_offset: FloatProperty(
         name="Sky rotation offset", default=0.0, min=-360.0, max=360.0,
+        update=_update_sky_rotation,
         description="Nishita's zero-rotation reference is not true north. "
                     "Calibrate once against a real hard shadow, then leave it")
     view_transform: EnumProperty(
-        name="View transform", default="Standard",
+        name="View transform", default="Standard", update=_update_view_transform,
         items=[("Standard", "Standard (match the plate)",
                 "sRGB in, sRGB out. The plate passes through unchanged, which "
                 "is what a composite needs"),
@@ -101,8 +185,10 @@ class Photo3DProps(bpy.types.PropertyGroup):
                 "the backplate stops matching the original photo")])
 
     # --- radiance --------------------------------------------------------
-    bounce_strength: FloatProperty(name="Bounce strength", default=3.0, min=0.0, soft_max=50.0)
-    bounce_saturation: FloatProperty(name="Bounce saturation", default=1.15, min=0.0, max=3.0)
+    bounce_strength: FloatProperty(name="Bounce strength", default=3.0, min=0.0,
+                                   soft_max=50.0, update=_update_bounce_strength)
+    bounce_saturation: FloatProperty(name="Bounce saturation", default=1.15, min=0.0,
+                                     max=3.0, update=_update_bounce_saturation)
     assumed_albedo: FloatProperty(
         name="Ground albedo", default=0.18, min=0.01, max=0.95,
         description="grass 0.18  asphalt 0.10  gravel 0.25  snow 0.75")
@@ -130,6 +216,15 @@ class Photo3DProps(bpy.types.PropertyGroup):
     gobo_size: FloatProperty(name="Gobo size (m)", default=30.0, min=1.0)
     gobo_distance: FloatProperty(name="Gobo distance (m)", default=20.0, min=1.0)
 
+    segment_long_edge: IntProperty(
+        name="Segment resolution", default=768, min=256, max=2048,
+        description="SAM 2 runs on a downscaled plate. Higher finds smaller "
+                    "objects and takes longer")
+    segment_max_regions: IntProperty(name="Max regions", default=24, min=1, max=128)
+    segment_min_area: FloatProperty(
+        name="Min region area", default=0.002, min=0.0001, max=0.5,
+        description="Fraction of the frame a mask must cover to be kept")
+
     panorama_path: StringProperty(name="Panorama", subtype="FILE_PATH")
     panorama_strength: FloatProperty(name="Panorama strength", default=1.0, min=0.0)
     panorama_rotation: FloatProperty(name="Panorama rotation", default=0.0, min=-360.0, max=360.0)
@@ -143,6 +238,8 @@ class Photo3DProps(bpy.types.PropertyGroup):
     solved_heading: FloatProperty(default=0.0)
     solved_height: FloatProperty(default=0.0)
     solved_confidence: FloatProperty(default=0.0)
+    solved_focal: FloatProperty(default=0.0)
+    solved_sun_azimuth: FloatProperty(default=0.0)
     solved_orientation_source: StringProperty(default="")
     solved_warnings: StringProperty(default="")
     plate_png: StringProperty(default="")

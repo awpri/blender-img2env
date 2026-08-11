@@ -17,6 +17,8 @@ feeds this code rather than replacing it.
 
 from __future__ import annotations
 
+import numpy as np
+
 import bpy
 from bpy.props import EnumProperty
 
@@ -184,7 +186,139 @@ class PHOTO3D_OT_select_proxy_for_editing(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (PHOTO3D_OT_split_material_region, PHOTO3D_OT_select_proxy_for_editing)
+# ---------------------------------------------------------------------------
+# segmentation-driven splitting
+# ---------------------------------------------------------------------------
+
+def face_labels(obj, labels, intrinsics) -> np.ndarray:
+    """Which label each face of `obj` falls in, by projecting its centroid.
+
+    The proxy's local coordinates ARE Blender camera space — it was parked on
+    the camera's matrix at build time — so projecting needs no world transform
+    and no view matrix, just the intrinsics the solve already produced. That
+    also means it keeps working after the object has been split, which the
+    face-index bookkeeping otherwise would not.
+
+    Blender camera space is x right, y up, -z forward; OpenCV is x right,
+    y down, +z forward. Hence the sign flips below.
+    """
+    count = len(obj.data.polygons)
+    centres = np.empty(count * 3, dtype=np.float32)
+    obj.data.polygons.foreach_get("center", centres)
+    centres = centres.reshape(-1, 3)
+
+    forward = -centres[:, 2]
+    valid = forward > 1e-6
+    forward = np.where(valid, forward, 1.0)
+
+    fx, fy = intrinsics["fx"], intrinsics["fy"]
+    cx, cy = intrinsics["cx"], intrinsics["cy"]
+    u = (cx + fx * centres[:, 0] / forward) / intrinsics["width"]
+    v = (cy - fy * centres[:, 1] / forward) / intrinsics["height"]
+
+    height, width = labels.shape
+    cols = np.clip((u * width).astype(np.int32), 0, width - 1)
+    rows = np.clip((v * height).astype(np.int32), 0, height - 1)
+    out = labels[rows, cols]
+    out[~valid] = 0
+    return out
+
+
+class PHOTO3D_OT_segment_proxy(bpy.types.Operator):
+    """Split the proxy into separate objects using SAM 2 masks"""
+    bl_idname = "photo3d.segment_proxy"
+    bl_label = "Segment Into Regions"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return (bpy.data.objects.get("Photo3D_Proxy") is not None
+                and bool(context.scene.photo3d.image_path))
+
+    def execute(self, context):
+        from . import client
+
+        props = context.scene.photo3d
+        try:
+            result = client.segment({
+                "image_path": bpy.path.abspath(props.image_path),
+                "long_edge": props.segment_long_edge,
+                "max_regions": props.segment_max_regions,
+                "min_area_fraction": props.segment_min_area,
+            })
+        except (client.SolverUnreachable, client.SolverRefused) as exc:
+            self.report({"ERROR"}, str(exc))
+            return {"CANCELLED"}
+
+        labels = np.load(result["labels_npy"]).astype(np.int32)
+        proxy_obj = bpy.data.objects["Photo3D_Proxy"]
+        scene = context.scene
+        long_edge = max(scene.render.resolution_x, scene.render.resolution_y)
+        camera = bpy.data.objects.get("Photo3D_Cam")
+        f_px = (camera.data.lens / camera.data.sensor_width * long_edge) if camera else long_edge
+        intrinsics = {"fx": f_px, "fy": f_px,
+                      "cx": scene.render.resolution_x / 2.0,
+                      "cy": scene.render.resolution_y / 2.0,
+                      "width": scene.render.resolution_x,
+                      "height": scene.render.resolution_y}
+
+        wanted = sorted({int(r["label"]) for r in result["regions"]})
+        if context.object is not None and context.object.mode != "OBJECT":
+            bpy.ops.object.mode_set(mode="OBJECT")
+
+        created = 0
+        for label in wanted:
+            # Re-derive membership against the CURRENT mesh each time: every
+            # separate() renumbers the faces that are left behind, so indices
+            # computed once up front would drift after the first split.
+            current = face_labels(proxy_obj, labels, intrinsics)
+            selected = current == label
+            if selected.sum() < 8:
+                continue
+
+            # Clear vertex and edge flags before setting faces. A freshly built
+            # mesh has every vertex flagged selected, and entering Edit Mode
+            # flushes vertex selection upward — so setting only the polygon
+            # flags selects the entire mesh and the first region swallows
+            # everything.
+            mesh = proxy_obj.data
+            mesh.vertices.foreach_set("select", np.zeros(len(mesh.vertices), np.int8))
+            mesh.edges.foreach_set("select", np.zeros(len(mesh.edges), np.int8))
+            mesh.polygons.foreach_set("select", selected.astype(np.int8))
+            before = set(bpy.data.objects.keys())
+            bpy.ops.object.select_all(action="DESELECT")
+            proxy_obj.select_set(True)
+            context.view_layer.objects.active = proxy_obj
+            bpy.ops.object.mode_set(mode="EDIT")
+            bpy.ops.mesh.select_mode(type="FACE")
+            try:
+                bpy.ops.mesh.separate(type="SELECTED")
+            finally:
+                bpy.ops.object.mode_set(mode="OBJECT")
+
+            new_names = [n for n in bpy.data.objects.keys() if n not in before]
+            if not new_names:
+                continue
+            region = bpy.data.objects[new_names[0]]
+            region.name = region.data.name = f"Photo3D_Seg_{label:02d}"
+            # They inherit the proxy's material and shadow-catcher behaviour, so
+            # the scene renders identically until a material is assigned. The
+            # split is the useful part; what each surface is made of is the
+            # user's call, because SAM 2 is class-agnostic.
+            region.is_shadow_catcher = proxy_obj.is_shadow_catcher
+            region.display_type = "WIRE"
+            created += 1
+
+        context.view_layer.objects.active = proxy_obj
+        self.report({"INFO"},
+                    f"{created} regions split off ({result['note']}). Select one and "
+                    "give it a material below; the preview is at "
+                    + result["preview_png"])
+        return {"FINISHED"}
+
+
+CLASSES = (PHOTO3D_OT_split_material_region, PHOTO3D_OT_select_proxy_for_editing,
+           PHOTO3D_OT_segment_proxy)
 
 
 def register():

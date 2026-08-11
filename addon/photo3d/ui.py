@@ -24,6 +24,13 @@ class PHOTO3D_PT_main(Photo3DPanel, bpy.types.Panel):
     bl_label = "Photo3D"
     bl_idname = "PHOTO3D_PT_main"
 
+    def draw_header_preset(self, context):
+        # Shown in the panel header so "am I running the build I just
+        # installed?" is answerable without digging through Preferences. A
+        # stale add-on explains most symptoms that look like broken rendering.
+        from . import bl_info
+        self.layout.label(text="v" + ".".join(str(n) for n in bl_info["version"]))
+
     def draw(self, context):
         props = context.scene.photo3d
         layout = self.layout
@@ -223,6 +230,19 @@ class PHOTO3D_PT_materials(Photo3DPanel, bpy.types.Panel):
         column.label(text="glass, water or metal so CG behind it")
         column.label(text="is seen through it and reflects it.")
 
+        box = layout.box()
+        box.label(text="Find surfaces automatically", icon="MOD_MASK")
+        note = box.column(align=True)
+        note.scale_y = 0.8
+        note.label(text="SAM 2 finds the surfaces; it cannot")
+        note.label(text="tell which is glass, so you say.")
+        column = box.column(align=True)
+        column.prop(props, "segment_long_edge")
+        column.prop(props, "segment_max_regions")
+        column.prop(props, "segment_min_area")
+        box.operator("photo3d.segment_proxy", icon="MOD_MASK")
+
+        layout.separator()
         layout.operator("photo3d.edit_proxy", icon="EDITMODE_HLT")
         if context.mode == "EDIT_MESH":
             box = layout.box()
