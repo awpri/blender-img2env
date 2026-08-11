@@ -328,6 +328,7 @@ class PHOTO3D_OT_solve(bpy.types.Operator):
         """Keep the measurements so the panel can show them. A scene you cannot
         interrogate is a scene you cannot calibrate."""
         props.solved = True
+        props.solved_focal = float(solve["intrinsics"]["focal_35mm"])
         props.solved_pitch = float(solve.get("pitch_deg") or 0.0)
         props.solved_roll = float(solve.get("roll_deg") or 0.0)
         props.solved_heading = float(solve.get("heading_deg") or 0.0)

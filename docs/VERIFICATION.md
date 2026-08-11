@@ -117,18 +117,32 @@ wireframe viewport and only shows up as a surface that catches no shadows.
 `make smoke` builds the mesh in Blender and confirms it is a passive rigid body
 with normals facing the camera.
 
-### Depth Pro's metric scale is wrong on these photographs
+### Metric scale: fine on a normal lens, 5x out on ultra-wide landscapes
 
-Run against both reference files, using the people in them as the known object
-the acceptance criterion calls for:
+Run against all three reference files, using the people in them as the known
+object the acceptance criterion calls for:
 
-| photo | object | true distance | Depth Pro says | implied height |
-|---|---|---|---|---|
-| `IMG_7263.DNG` | person, 495 px | 11.1 m | 2.20 m | **0.35 m** |
-| `IMG_7096.HEIC` | hiker, 395 px | 13.5 m | 2.69 m | **0.34 m** |
+| photo | lens | object | true distance | Depth Pro says | implied height |
+|---|---|---|---|---|---|
+| `IMG_9920.DNG` station | 24 mm | man, 456 px | 20.6 m | 19.64 m | **1.67 m** |
+| `IMG_9920.DNG` station | 24 mm | woman, 1884 px | 4.9 m | 4.16 m | 1.46 m |
+| `IMG_7263.DNG` alpine | 14 mm | person, 495 px | 11.1 m | 2.20 m | **0.35 m** |
+| `IMG_7096.HEIC` alpine | 14 mm | hiker, 395 px | 13.5 m | 2.69 m | 0.34 m |
 
-An adult is 1.7 m. Both scenes under-read by **about 5x** at working distance,
-and the far field is far worse — 4 km peaks report under 10 m, sky reports 8 m.
+An adult is 1.7 m. **The station scene is accurate to 5% at 20 m and needs no
+correction**; its camera height solves to 1.18 m at 0.70 confidence, against
+0.55 m at 0.48 for the alpine shot. The ultra-wide landscapes under-read by
+about 5x, and their far field is hopeless — 4 km peaks report under 10 m, sky
+reports 8 m.
+
+The difference is the scene, not the code: same model, same path, same
+intrinsics handling. Half sky and half water with kilometres of range is simply
+outside what monocular metric depth can do. A normal lens pointed at things
+a few metres to tens of metres away is exactly what it is good at.
+
+`PHOTO3D_RUN_DEPTH=1 pytest server/tests/test_real_photos.py` pins all four
+measurements, so a regression in the focal handling or the resize would show up
+as a scale error rather than as a vague sense that depth got worse.
 
 This was checked properly before being blamed on the model. The pixel
 measurements were verified at 1:1; `f_px` was confirmed correct by the model's
@@ -137,10 +151,11 @@ configurations — resized and full resolution, supplied and estimated focal —
 all agree within 6%. No focal convention can reconcile a 5x error: it would
 need a 162-degree field of view.
 
-The error is **progressive, not affine**: roughly 1.5x at 1 m, 5x at 12 m, 400x
-at 4 km. So no single number fixes the whole frame. But one multiplier
-calibrated at the distance you actually work at does recover the near and mid
-field, which is where CG objects sit, collide and cast shadows.
+On the ultra-wide frames the error is **progressive, not affine**: roughly 1.5x
+at 1 m, 5x at 12 m, 400x at 4 km. So no single number fixes the whole frame.
+But one multiplier calibrated at the distance you actually work at does recover
+the near and mid field, which is where CG objects sit, collide and cast
+shadows.
 
 ```bash
 python tools/calibrate_scale.py testphotos/IMG_7263.DNG \
@@ -163,9 +178,14 @@ scaling depth by 5 also scales the noise and confidence drops (0.48 → 0.18 on
 for now because tuning it needs a scene with genuinely flat, known ground
 rather than a boulder field.
 
-**Still to do by hand — this is the acceptance test.** With `depth_scale` set,
+**Still to do by hand — this is the acceptance test.** Use `IMG_9920.DNG`: a
+normal lens on a human-scale scene, where the depth is already good enough and
+the flat platform gives the ground fit something real to lock onto. Solve, then
 add the drop-test cube (panel ▸ Proxy Geometry ▸ *Add Drop Test Cube*) and play
 the timeline. **Resting height must be within 15% of ground truth.**
+
+Do not judge M3 on the alpine shots. They are a genuinely hard case and failing
+them says nothing about whether the pipeline works.
 
 If it still lands wrong, check in this order: (1) the depth scale is actually
 being sent — the solve response echoes `depth_scale`; (2) the focal convention;

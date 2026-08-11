@@ -213,12 +213,16 @@ def solve(req: SolveRequest):
             f"ground plane confidence is only {ground.confidence:.2f} — the camera "
             "height is weakly supported, so check the scale before trusting a "
             "physics drop.")
-    if req.depth_scale == 1.0:
+    # Only flag the scale on the lens where it actually went wrong. Measured:
+    # at 14 mm on alpine landscapes Depth Pro under-read by 5x, while at 24 mm
+    # on a station platform it was within 5% at 20 m. Warning on every solve
+    # would train the user to ignore the warnings that matter.
+    if req.depth_scale == 1.0 and intrinsics.focal_35mm < 20.0:
         response["warnings"].append(
-            "depth_scale is 1.0 (uncalibrated). Depth Pro saturates on wide "
-            "scenes: on both reference photos a person at 11-14 m measured a "
-            "fifth of their real height. Run tools/calibrate_scale.py once for "
-            "this lens before trusting any physics drop.")
+            f"{intrinsics.focal_35mm:.0f}mm is ultra-wide, where Depth Pro's "
+            "metric scale has measured 5x low on scenes with a large depth "
+            "range. Check it against something of known size before trusting a "
+            "physics drop — tools/calibrate_scale.py does it for you.")
     return response
 
 

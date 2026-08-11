@@ -140,28 +140,32 @@ portable fallback. Install `pyobjc-framework-Quartz` for it.
 rectified it before writing the file. `docs/DECISIONS.md` §1 has the evidence;
 the detection code stays because other cameras may differ.
 
-### Calibrate the depth scale before trusting geometry
+### Depth accuracy depends enormously on the scene
 
-Using the people in both photographs as the known object:
+Measured against people of known size in three real photographs:
 
-| photo | true distance | Depth Pro says | implied human height |
-|---|---|---|---|
-| `IMG_7263.DNG` | 11.1 m | 2.20 m | 0.35 m |
-| `IMG_7096.HEIC` | 13.5 m | 2.69 m | 0.34 m |
+| photo | lens | object at | Depth Pro says | implied height | error |
+|---|---|---|---|---|---|
+| `IMG_9920.DNG` station | 24 mm | 20.6 m | 19.64 m | 1.67 m | **1.05x** |
+| `IMG_9920.DNG` station | 24 mm | 4.9 m | 4.16 m | 1.46 m | 1.17x |
+| `IMG_7263.DNG` alpine | 14 mm | 11.1 m | 2.20 m | 0.35 m | **5.03x** |
+| `IMG_7096.HEIC` alpine | 14 mm | 13.5 m | 2.69 m | 0.34 m | 5.0x |
 
-An adult is 1.7 m, so both under-read by **~5x** at working distance. The error
-is progressive — about 1.5x at 1 m, 5x at 12 m, 400x at 4 km — so no single
-number fixes the whole frame, but one calibrated at the distance you work at
-recovers the near and mid field, which is all that collides or casts shadows.
+Same model, same code path. **On a normal lens at human scale it is within 5%
+at 20 m — good enough for M3 with no correction at all.** What breaks it is an
+ultra-wide frame with kilometres of depth range: half sky, half water, peaks at
+4 km. There the error is progressive (1.5x at 1 m, 5x at 12 m, 400x at 4 km),
+so no single number fixes the frame.
+
+So: leave **Depth scale** at 1.0 and only reach for it on ultra-wide landscapes.
+The solve warns you when the lens is under 20 mm, and not otherwise.
 
 ```bash
 python tools/calibrate_scale.py testphotos/IMG_7263.DNG \
-    --top 4660 --bottom 5155 --x 3264 --height 1.75
+    --top 4660 --bottom 5155 --x 3264 --height 1.75   # -> 5.03
 ```
 
-Put the printed factor in the panel's **Depth scale**. It belongs to the lens
-and the kind of scene, not the individual photo. `docs/VERIFICATION.md` shows
-how this was confirmed rather than assumed.
+`docs/VERIFICATION.md` records how this was confirmed rather than assumed.
 
 ## Verified against Blender 5.2 LTS
 
