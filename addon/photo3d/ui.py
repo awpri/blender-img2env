@@ -112,6 +112,18 @@ class PHOTO3D_PT_proxy(Photo3DPanel, bpy.types.Panel):
         column.prop(props, "max_depth")
         column.prop(props, "collision_smooth")
 
+        box = self.layout.box()
+        row = box.row()
+        row.alert = props.depth_scale == 1.0
+        row.prop(props, "depth_scale")
+        if props.depth_scale == 1.0:
+            column = box.column(align=True)
+            column.scale_y = 0.8
+            column.label(text="Uncalibrated. Depth Pro under-reads", icon="ERROR")
+            column.label(text="~5x at 11-14m on wide scenes, so a")
+            column.label(text="dropped cube lands the wrong size.")
+            column.label(text="Run tools/calibrate_scale.py once.")
+
         self.layout.operator("photo3d.rebuild_proxy", icon="MOD_REMESH")
         self.layout.operator("photo3d.drop_test", icon="PHYSICS")
 

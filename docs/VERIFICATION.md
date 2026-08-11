@@ -117,15 +117,59 @@ wireframe viewport and only shows up as a surface that catches no shadows.
 `make smoke` builds the mesh in Blender and confirms it is a passive rigid body
 with normals facing the camera.
 
-**Still to do by hand — this is the acceptance test.** Shoot a frame containing
-an object of known size. Solve. Add the drop-test cube (panel ▸ Proxy Geometry ▸
-*Add Drop Test Cube*) and play the timeline. **Resting height must be within
-15% of ground truth.**
+### Depth Pro's metric scale is wrong on these photographs
 
-If it lands at the wrong scale, check in this order: (1) the `f_px` handed to
-Depth Pro is that of the resized image, not the full plate; (2) the focal
-convention; (3) the ground-plane confidence in the panel — under 15% means the
-height is weakly supported and the panel says so.
+Run against both reference files, using the people in them as the known object
+the acceptance criterion calls for:
+
+| photo | object | true distance | Depth Pro says | implied height |
+|---|---|---|---|---|
+| `IMG_7263.DNG` | person, 495 px | 11.1 m | 2.20 m | **0.35 m** |
+| `IMG_7096.HEIC` | hiker, 395 px | 13.5 m | 2.69 m | **0.34 m** |
+
+An adult is 1.7 m. Both scenes under-read by **about 5x** at working distance,
+and the far field is far worse — 4 km peaks report under 10 m, sky reports 8 m.
+
+This was checked properly before being blamed on the model. The pixel
+measurements were verified at 1:1; `f_px` was confirmed correct by the model's
+own independent focal estimate (597 px passed, 635 px estimated); and four
+configurations — resized and full resolution, supplied and estimated focal —
+all agree within 6%. No focal convention can reconcile a 5x error: it would
+need a 162-degree field of view.
+
+The error is **progressive, not affine**: roughly 1.5x at 1 m, 5x at 12 m, 400x
+at 4 km. So no single number fixes the whole frame. But one multiplier
+calibrated at the distance you actually work at does recover the near and mid
+field, which is where CG objects sit, collide and cast shadows.
+
+```bash
+python tools/calibrate_scale.py testphotos/IMG_7263.DNG \
+    --top 4660 --bottom 5155 --x 3264 --height 1.75
+# -> depth_scale = 5.03
+```
+
+Put that in the panel's **Depth scale** field. It is a property of the lens and
+the kind of scene rather than of one photograph, so calibrate once and reuse.
+With it, `IMG_7263` moves from a 0.55 m camera height to 2.59 m — plausible for
+someone standing on those boulders, where 0.55 m never was.
+
+The panel shows the field in red until it is set, and the solve returns a
+warning, because an uncalibrated solve drops cubes at a fifth of the right size
+and nothing else in the pipeline will tell you.
+
+**Known follow-up:** the ground-plane inlier band is a fixed 0.15 m window, so
+scaling depth by 5 also scales the noise and confidence drops (0.48 → 0.18 on
+`IMG_7263`). The band should probably scale with the depth range. Left alone
+for now because tuning it needs a scene with genuinely flat, known ground
+rather than a boulder field.
+
+**Still to do by hand — this is the acceptance test.** With `depth_scale` set,
+add the drop-test cube (panel ▸ Proxy Geometry ▸ *Add Drop Test Cube*) and play
+the timeline. **Resting height must be within 15% of ground truth.**
+
+If it still lands wrong, check in this order: (1) the depth scale is actually
+being sent — the solve response echoes `depth_scale`; (2) the focal convention;
+(3) the ground-plane confidence in the panel.
 
 ---
 

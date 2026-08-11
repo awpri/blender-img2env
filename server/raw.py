@@ -259,8 +259,46 @@ def load_display_image(path: str | Path):
 # writing
 # ---------------------------------------------------------------------------
 
+def _write_exr_coreimage(data: np.ndarray, path: str) -> str:
+    """EXR via Core Image. macOS 14+, and it needs nothing beyond the pyobjc
+    bridge the RAW decoder already uses.
+
+    Worth preferring over OpenCV specifically: Apple's Depth Pro pins numpy<2
+    while opencv-python 5 requires numpy>=2, so installing both leaves cv2
+    unimportable and takes the EXR writer down with it. This backend has no
+    such conflict.
+
+    Core Image's origin is bottom-left while a numpy image raster is top-down,
+    so the rows are flipped on the way in. Getting that wrong puts the sky at
+    the bottom of the lighting plate, which through Window coordinates lights
+    the scene upside down.
+    """
+    from Foundation import NSData, NSURL
+    from Quartz import (CGColorSpaceCreateWithName, CGSizeMake, CIContext, CIImage,
+                        kCGColorSpaceExtendedLinearSRGB, kCIFormatRGBAf)
+
+    height, width = data.shape[:2]
+    rgba = np.ones((height, width, 4), dtype=np.float32)
+    rgba[..., :3] = data[..., :3]
+    rgba = np.ascontiguousarray(rgba[::-1])          # top-down -> bottom-up
+
+    image = CIImage.imageWithBitmapData_bytesPerRow_size_format_colorSpace_(
+        NSData.dataWithBytes_length_(rgba.tobytes(), rgba.nbytes),
+        width * 16, CGSizeMake(width, height), kCIFormatRGBAf,
+        CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB))
+    if image is None:
+        raise PlateError("Core Image could not wrap the pixel buffer")
+
+    ok, error = CIContext.contextWithOptions_(None).\
+        writeOpenEXRRepresentationOfImage_toURL_options_error_(
+            image, NSURL.fileURLWithPath_(path), {}, None)
+    if not ok:
+        raise PlateError(f"Core Image EXR write failed: {error}")
+    return path
+
+
 def write_exr(image: np.ndarray, path: str | Path) -> str:
-    """Write float32 RGB as a 32-bit EXR, using whichever backend is installed.
+    """Write float32 RGB as a 32-bit EXR, using whichever backend is available.
 
     Blender reads EXR natively and treats it as linear, which is the only
     format in this pipeline that can carry a value above 1.0 — the entire
@@ -269,6 +307,14 @@ def write_exr(image: np.ndarray, path: str | Path) -> str:
     path = str(path)
     data = np.ascontiguousarray(np.asarray(image, dtype=np.float32))
     errors = []
+
+    if sys.platform == "darwin":
+        try:
+            return _write_exr_coreimage(data, path)
+        except ImportError as exc:
+            errors.append(f"Core Image: {exc} (pip install pyobjc-framework-Quartz)")
+        except Exception as exc:                                  # noqa: BLE001
+            errors.append(f"Core Image: {type(exc).__name__}: {exc}")
 
     try:
         import OpenImageIO as oiio
@@ -299,9 +345,11 @@ def write_exr(image: np.ndarray, path: str | Path) -> str:
         errors.append(f"imageio: {exc}")
 
     raise PlateError(
-        "no EXR backend available; the linear lighting plate cannot be written. "
-        "Install one of: pip install opencv-python | imageio[freeimage] | "
-        "OpenImageIO.\nTried:\n  " + "\n  ".join(errors))
+        "no EXR backend available; the linear lighting plate cannot be written.\n"
+        "On macOS:  pip install pyobjc-framework-Quartz   (no numpy constraint)\n"
+        "Otherwise: pip install 'opencv-python<5'         (opencv 5 needs numpy>=2, "
+        "which conflicts with Depth Pro's numpy<2)\n"
+        "Tried:\n  " + "\n  ".join(errors))
 
 
 def write_png(image: np.ndarray, path: str | Path) -> str:

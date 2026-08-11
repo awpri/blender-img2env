@@ -29,11 +29,15 @@ refine = ["diffusers>=0.27", "transformers", "accelerate"]
 # 0.22 cannot open an iPhone 17 Pro ProRAW file (DNG 1.7 / JPEG XL) at all, so
 # Apple's own Core Image decoder is the only offline route to a linear plate.
 # rawpy stays for other cameras. See docs/DECISIONS.md section 1b.
+# opencv is capped below 5 on purpose: opencv-python 5 requires numpy>=2, while
+# Apple's Depth Pro pins numpy<2, and installing both leaves cv2 unimportable —
+# which silently removes the EXR writer. On macOS the Quartz bridge writes EXR
+# itself and opencv is not needed at all.
 raw = [
     "rawpy>=0.19",
-    "opencv-python>=4.9",
     "pillow-heif>=0.15",
     "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
+    "opencv-python>=4.9,<5; sys_platform != 'darwin'",
 ]
 # Intrinsic decomposition for the sun gobo.
 # pip install git+https://github.com/compphoto/Intrinsic.git

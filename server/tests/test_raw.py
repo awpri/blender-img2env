@@ -96,13 +96,17 @@ def test_exr_carries_values_above_one(tmp_path):
                 import os
                 os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
                 import cv2
-                back = cv2.imread(path, cv2.IMREAD_UNCHANGED)[..., ::-1]
+                back = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+                # cv2 hands back BGR(A). Drop alpha BEFORE reversing — reversing
+                # four channels yields ARGB and reads the alpha as red, which
+                # looks exactly like the writer having clamped to 1.0.
+                back = np.asarray(back)[..., :3][..., ::-1]
             elif reader == "imageio.v3":
                 import imageio.v3 as iio
-                back = iio.imread(path)
+                back = np.asarray(iio.imread(path))[..., :3]
             else:
                 import OpenImageIO as oiio
-                back = oiio.ImageInput.open(path).read_image()
+                back = np.asarray(oiio.ImageInput.open(path).read_image())[..., :3]
         except Exception:                                          # noqa: BLE001
             continue
         assert float(np.asarray(back)[..., 0].max()) == pytest.approx(47.0, rel=1e-3)

@@ -32,13 +32,25 @@ venv:
 	@echo "Optional, for the M7 sun gobo:"
 	@echo "  $(VENV)/bin/pip install git+https://github.com/compphoto/Intrinsic.git"
 
-# The daemon finds the checkpoint by searching; ~/src/ml-depth-pro is the first
-# place it looks, so put it there and nothing needs configuring.
+# The daemon finds the checkpoint by searching; ~/src/ml-depth-pro/checkpoints
+# is the first place it looks, so put it there and nothing needs configuring.
+#
+# Fetched with curl rather than by running Apple's get_pretrained_models.sh,
+# which calls wget — not present on a stock macOS, and the failure comes after
+# the clone so it looks like the clone went wrong.
+WEIGHTS_DIR ?= $(HOME)/src/ml-depth-pro/checkpoints
+WEIGHTS_URL ?= https://ml-site.cdn-apple.com/models/depth-pro/depth_pro.pt
+
 weights:
-	@test -d $(HOME)/src/ml-depth-pro || \
-	  git clone https://github.com/apple/ml-depth-pro.git $(HOME)/src/ml-depth-pro
-	cd $(HOME)/src/ml-depth-pro && bash get_pretrained_models.sh
-	@ls -lh $(HOME)/src/ml-depth-pro/checkpoints/depth_pro.pt
+	@mkdir -p $(WEIGHTS_DIR)
+	@if [ -s $(WEIGHTS_DIR)/depth_pro.pt ]; then \
+	  echo "already have $(WEIGHTS_DIR)/depth_pro.pt"; \
+	else \
+	  echo "fetching ~1.9 GB from $(WEIGHTS_URL)"; \
+	  curl -fL --progress-bar -o $(WEIGHTS_DIR)/depth_pro.pt.part $(WEIGHTS_URL) && \
+	  mv $(WEIGHTS_DIR)/depth_pro.pt.part $(WEIGHTS_DIR)/depth_pro.pt; \
+	fi
+	@ls -lh $(WEIGHTS_DIR)/depth_pro.pt
 
 test:
 	@$(VENV)/bin/python -m pytest server/tests -q 2>/dev/null || \

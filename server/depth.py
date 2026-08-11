@@ -192,6 +192,33 @@ def refine_with_marigold(image, metric: np.ndarray, steps: int = 4) -> np.ndarra
 # post-processing (no torch)
 # ---------------------------------------------------------------------------
 
+def implied_size(pixel_height: float, depth_m: float, f_px: float) -> float:
+    """Metric size of an object spanning `pixel_height` px at `depth_m`."""
+    return pixel_height * depth_m / f_px
+
+
+def scale_for_known_object(pixel_height: float, true_height_m: float,
+                           depth_m: float, f_px: float) -> float:
+    """Multiplier that makes a known object come out its real size.
+
+    Depth Pro's metric output saturates on wide-angle scenes with a large depth
+    range: measured on both reference photographs, a person at 11-14 m reads
+    about a fifth of their real height, and peaks 4 km away read under 10 m.
+    The near field is only ~1.5x out, so a single multiplier calibrated at the
+    distance you actually care about recovers usable geometry there — which is
+    where CG objects sit, collide and cast shadows.
+
+    It cannot fix the far field. Nothing can, from one photograph: the error is
+    progressive, not affine. Clamp the far field and do not chase it.
+
+    `pixel_height` and `f_px` must be in the same raster's pixels.
+    """
+    implied = implied_size(pixel_height, depth_m, f_px)
+    if implied <= 1e-6:
+        raise ValueError("object has no measurable size at that depth")
+    return float(true_height_m) / implied
+
+
 def clamp_far_field(depth: np.ndarray, far_m: float = DEFAULT_FAR_CLAMP_M,
                     near_m: float = 0.05) -> np.ndarray:
     """Clamp and de-NaN. Keeps a single inf from turning the proxy mesh into a

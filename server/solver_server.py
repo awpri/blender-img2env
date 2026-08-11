@@ -50,6 +50,12 @@ class SolveRequest(BaseModel):
     depth_long_edge: int = Field(1536, ge=256, le=4096)
     assumed_eye_height: float = Field(1.55, gt=0.0)
     far_clamp_m: float = Field(depth_mod.DEFAULT_FAR_CLAMP_M, gt=1.0)
+    depth_scale: float = Field(
+        1.0, gt=0.0,
+        description="Multiplier on metric depth. Depth Pro saturates on wide "
+                    "scenes with a big depth range — on both reference photos a "
+                    "person at 11-14 m read a fifth of their real height. "
+                    "Calibrate once per lens with tools/calibrate_scale.py.")
     want_lighting_plate: bool = True
     skip_depth: bool = Field(False, description="metadata-only solve (milestone M1)")
 
@@ -180,6 +186,10 @@ def solve(req: SolveRequest):
         traceback.print_exc()
         raise HTTPException(500, f"depth inference failed: {exc}") from None
 
+    # Scale before clamping: the clamp is a metric distance, so applying it to
+    # unscaled depth would cut the scene at the wrong place.
+    if req.depth_scale != 1.0:
+        depth = depth * float(req.depth_scale)
     depth = depth_mod.clamp_far_field(depth, req.far_clamp_m)
     ground = depth_mod.solve_ground(depth, intrinsics.__dict__,
                                     state.orientation.gravity_camera if state.orientation else None,
@@ -192,6 +202,7 @@ def solve(req: SolveRequest):
         "depth_npy": str(depth_path),
         "depth_shape": [int(depth.shape[0]), int(depth.shape[1])],
         "depth_stats": depth_mod.depth_statistics(depth),
+        "depth_scale": req.depth_scale,
         "camera_height_m": ground.camera_height_m,
         "ground_confidence": ground.confidence,
         "ground_source": ground.source,
@@ -202,6 +213,12 @@ def solve(req: SolveRequest):
             f"ground plane confidence is only {ground.confidence:.2f} — the camera "
             "height is weakly supported, so check the scale before trusting a "
             "physics drop.")
+    if req.depth_scale == 1.0:
+        response["warnings"].append(
+            "depth_scale is 1.0 (uncalibrated). Depth Pro saturates on wide "
+            "scenes: on both reference photos a person at 11-14 m measured a "
+            "fifth of their real height. Run tools/calibrate_scale.py once for "
+            "this lens before trusting any physics drop.")
     return response
 
 

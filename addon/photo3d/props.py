@@ -53,6 +53,13 @@ class Photo3DProps(bpy.types.PropertyGroup):
         description="Disparity spread above which a quad is deleted. Lower it "
                     "if stretched skirts trail off silhouettes, raise it if "
                     "silhouettes develop holes")
+    depth_scale: FloatProperty(
+        name="Depth scale", default=1.0, min=0.01, soft_max=20.0,
+        description="Multiplier on metric depth. Depth Pro saturates on wide "
+                    "scenes with a big depth range — on both reference photos a "
+                    "person at 11-14m measured a fifth of their real height. "
+                    "Run tools/calibrate_scale.py once for this lens. Leaving "
+                    "this at 1.0 means a dropped cube lands at the wrong size")
     max_depth: FloatProperty(
         name="Far clip (m)", default=120.0, min=5.0,
         description="Metric depth degrades badly past ~100m and a 14mm frame "

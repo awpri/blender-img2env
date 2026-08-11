@@ -246,6 +246,36 @@ def test_clamp_far_field_removes_non_finite_values():
     assert clean.max() <= 120.0 and clean.min() >= 0.05
 
 
+# ---------------------------------------------------------------------------
+# metric scale calibration
+# ---------------------------------------------------------------------------
+
+def test_implied_size_is_the_pinhole_relation():
+    # 1.75 m at 11.1 m through a 3136 px lens subtends ~495 px
+    assert depth_mod.implied_size(495, 11.1, 3136) == pytest.approx(1.752, abs=0.01)
+
+
+def test_scale_factor_recovers_a_known_object():
+    """The measured case from IMG_7263: a 495 px person that Depth Pro places
+    at 2.20 m implies a 0.35 m human, so depth needs multiplying by ~5."""
+    factor = depth_mod.scale_for_known_object(pixel_height=495, true_height_m=1.75,
+                                              depth_m=2.20, f_px=3136)
+    assert factor == pytest.approx(5.03, abs=0.05)
+
+    # applying it must make the object measure correctly
+    corrected = depth_mod.implied_size(495, 2.20 * factor, 3136)
+    assert corrected == pytest.approx(1.75, rel=1e-6)
+
+
+def test_correct_depth_needs_no_correction():
+    assert depth_mod.scale_for_known_object(495, 1.75, 11.1, 3136) == pytest.approx(1.0, abs=0.01)
+
+
+def test_zero_sized_object_is_refused():
+    with pytest.raises(ValueError):
+        depth_mod.scale_for_known_object(0, 1.75, 11.1, 3136)
+
+
 def test_checkpoint_env_override_wins(tmp_path, monkeypatch):
     """Depth Pro's default config points at ./checkpoints/depth_pro.pt, relative
     to the working directory, so a daemon started from the repo root looks in

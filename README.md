@@ -120,7 +120,7 @@ remains manual for each milestone.
 |---|---|
 | **M1** EXIF solve | **passes on the real `IMG_7096.HEIC`**: pitch 3.279°, roll 0.715°, heading 76.944°, 14 mm, zero warnings. Four-orientation set agrees within 0.25°. |
 | **M2** camera into Blender | rotation maths pinned by 200+ synthetic cases and re-checked against the real solve; camera verified inside Blender. Needs the backplate eye-check. |
-| **M3** depth → proxy | ground-plane recovery within 2% on analytic depth; mesh, winding and rigid body verified in Blender. The cube-resting-height acceptance needs Depth Pro weights and a GPU. |
+| **M3** depth → proxy | runs end to end on the real DNG (45 s cold, MPS). Ground-plane recovery within 2% on analytic depth. **But Depth Pro's metric scale is ~5x out on these scenes** — calibrate before trusting it, see below. |
 | **M4** shadow proxy + compositor | node graph asserted, including Window coords and the Alpha Over order. Chrome-sphere check needs a render. |
 | **M5** bounce proxy | ray-visibility split asserted both ways; strength calibration tested; A/B toggle built for the double-counting check. Now driven by the linear EXR when there is one. Needs the white-sphere render. |
 | **M6** DNG lighting plate | **works on the real `IMG_7263.DNG`** — linear EXR, max 2.890 against a median of 0.210, 0.52% of pixels above diffuse white. Required a decoder change; see below. |
@@ -139,6 +139,29 @@ portable fallback. Install `pyobjc-framework-Quartz` for it.
 `PhotometricInterpretation: Linear Raw` with no opcode tags at all — Apple
 rectified it before writing the file. `docs/DECISIONS.md` §1 has the evidence;
 the detection code stays because other cameras may differ.
+
+### Calibrate the depth scale before trusting geometry
+
+Using the people in both photographs as the known object:
+
+| photo | true distance | Depth Pro says | implied human height |
+|---|---|---|---|
+| `IMG_7263.DNG` | 11.1 m | 2.20 m | 0.35 m |
+| `IMG_7096.HEIC` | 13.5 m | 2.69 m | 0.34 m |
+
+An adult is 1.7 m, so both under-read by **~5x** at working distance. The error
+is progressive — about 1.5x at 1 m, 5x at 12 m, 400x at 4 km — so no single
+number fixes the whole frame, but one calibrated at the distance you work at
+recovers the near and mid field, which is all that collides or casts shadows.
+
+```bash
+python tools/calibrate_scale.py testphotos/IMG_7263.DNG \
+    --top 4660 --bottom 5155 --x 3264 --height 1.75
+```
+
+Put the printed factor in the panel's **Depth scale**. It belongs to the lens
+and the kind of scene, not the individual photo. `docs/VERIFICATION.md` shows
+how this was confirmed rather than assumed.
 
 ## Verified against Blender 5.2 LTS
 

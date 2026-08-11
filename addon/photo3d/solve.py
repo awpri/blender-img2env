@@ -290,6 +290,7 @@ class PHOTO3D_OT_solve(bpy.types.Operator):
             "assumed_eye_height": props.fallback_height,
             "far_clamp_m": props.max_depth,
             "focal_convention": props.focal_convention,
+            "depth_scale": props.depth_scale,
         }
         if props.focal_override > 0.0:
             payload["focal_override"] = props.focal_override
