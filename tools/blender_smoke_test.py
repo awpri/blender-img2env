@@ -209,9 +209,18 @@ def main() -> int:
                 else scene.node_tree)
         over = next(n for n in tree.nodes if n.type == "ALPHAOVER")
         background, foreground = solve_mod._alpha_over_sockets(over)
-        assert background.links[0].from_node.type == "IMAGE", "plate must be behind"
         assert foreground.links[0].from_node.type == "R_LAYERS", "CG must be in front"
         assert over.outputs["Image"].links, "Alpha Over must reach the output"
+
+        # The plate reaches the background through a Scale node. Without it an
+        # 8064 px plate is pasted 1:1 into a half-size render and you get a
+        # centre crop, which looks like the CG having vanished.
+        scale = background.links[0].from_node
+        assert scale.type == "SCALE", f"plate must be scaled, not {scale.type}"
+        assert scale.inputs["Image"].links[0].from_node.type == "IMAGE"
+        mode = (getattr(scale, "space", None)
+                or scale.inputs["Type"].default_value)
+        assert mode in ("RENDER_SIZE", "Render Size"), f"scale mode is {mode!r}"
 
     @check("bounce proxy splits ray visibility without double counting")
     def _():

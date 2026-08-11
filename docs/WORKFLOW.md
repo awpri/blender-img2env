@@ -118,6 +118,24 @@ renders are genuinely comparable.
 
 ---
 
+## 5b. Match the exposure — do this or everything looks blown out
+
+The sun and sky default to 4.0 and 1.0, which are arbitrary numbers. Arbitrary
+numbers put CG several stops brighter than the photograph it is standing in,
+and the result reads as "the compositing doesn't work" rather than "the key
+light is too strong". Nothing else in the pipeline tells you, because every
+other check is geometric.
+
+*Sun & Sky ▸ Match Exposure to Plate* solves it: the plate says what radiance
+the real ground has, the assumed albedo says what irradiance produced it, and
+both strengths are scaled by that one factor — so whatever sun-to-sky ratio you
+set is preserved.
+
+Set **Ground albedo** first, under Bounce Light. It is the same number both
+calibrations use.
+
+---
+
 ## 6. Sun and sky
 
 Set automatically from the solar ephemeris. Two knobs worth knowing:
@@ -161,6 +179,27 @@ shade — a dark rock reads as shadow. It is clamped so the worst case is a
 slightly-too-dark patch rather than a hole punched in the sunlight. Installing
 `compphoto/Intrinsic` gets you proper reflectance/shading separation, which
 does not make that mistake.
+
+---
+
+## 7b. Glass, water and metal
+
+The proxy arrives as one matte surface, which is right for ground and rock and
+wrong for anything transmissive. A glass shelter modelled as matte grey will
+not transmit a CG object standing behind it.
+
+*Surface Materials ▸ Edit Proxy Faces*, select the faces covering the surface
+(hover and press **L** to grab a connected patch, or box-select), then click
+**Glass**, **Water**, **Metal**, **Polished** or **Matte**.
+
+That splits the selection into its own object with a real material. Glass and
+water are made camera-visible and stop being shadow catchers, because a matte
+cannot refract — so CG behind them is genuinely seen through them. Metal and
+matte keep catching shadows and take their colour from the plate.
+
+Doing it by hand is not a placeholder: glass is defined by what is behind it,
+which monocular depth cannot see, and you know which surface is glass. When
+segmentation lands it will feed this same operator rather than replace it.
 
 ---
 

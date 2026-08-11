@@ -34,9 +34,9 @@ except ModuleNotFoundError:      # imported by the server or by pytest
 from . import coords, imaging  # noqa: E402,F401  (bpy-free, always safe)
 
 if _IN_BLENDER:
-    from . import props, solve, proxy, radiance, ui  # noqa: E402
+    from . import props, solve, proxy, materials, radiance, ui  # noqa: E402
 
-    _MODULES = (props, solve, proxy, radiance, ui)
+    _MODULES = (props, solve, proxy, materials, radiance, ui)
 
     def register():
         for module in _MODULES:

@@ -229,6 +229,82 @@ class PHOTO3D_OT_toggle_bounce(bpy.types.Operator):
         return {"FINISHED"}
 
 
+#: Roughly how much irradiance a Nishita sky puts on a horizontal surface per
+#: unit of Background strength, with the sun well up. An approximation — the
+#: real figure depends on sun elevation and turbidity — but it only has to get
+#: the exposure into the right neighbourhood, and it preserves whatever sun/sky
+#: ratio the user has dialled in.
+SKY_IRRADIANCE_PER_STRENGTH = 2.0
+
+
+class PHOTO3D_OT_calibrate_exposure(bpy.types.Operator):
+    """Match CG brightness to the photograph, instead of guessing at 4.0"""
+    bl_idname = "photo3d.calibrate_exposure"
+    bl_label = "Match Exposure to Plate"
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        """Solve the light strengths from the plate's own brightness.
+
+        The sun and sky defaults are arbitrary numbers, and arbitrary numbers
+        put CG objects several stops brighter than the photograph they are
+        standing in — which reads as "the compositing does not work" rather
+        than "the key light is too strong". Nothing else in the pipeline tells
+        you, because every other check is geometric.
+
+        For a Lambertian surface, radiance = irradiance * albedo / pi. The
+        plate says what radiance the real ground has; the albedo is assumed
+        (the same number the bounce calibration uses); so the irradiance the
+        scene needs follows. Both strengths are then scaled by one factor,
+        which preserves the sun-to-sky ratio.
+        """
+        props = context.scene.photo3d
+        proxy_obj = bpy.data.objects.get("Photo3D_Proxy")
+        plate = find_plate(proxy_obj)
+        if plate is None:
+            self.report({"ERROR"}, "no plate found; solve first")
+            return {"CANCELLED"}
+
+        pixels = image_to_array(plate, 256)
+        ground = pixels[pixels.shape[0] // 2:]          # lower half is the ground
+        measured = float(np.median(imaging.luminance(ground)))
+        if measured <= 1e-5:
+            self.report({"ERROR"}, "the plate's ground reads as black; cannot calibrate")
+            return {"CANCELLED"}
+
+        needed = measured * np.pi / max(props.assumed_albedo, 1e-3)
+
+        sun = bpy.data.lights.get("Photo3D_Sun")
+        elevation = 1.0
+        sun_info_obj = bpy.data.objects.get("Photo3D_Sun")
+        if sun_info_obj is not None:
+            direction = sun_info_obj.matrix_world.to_quaternion() @ Vector((0, 0, -1))
+            elevation = max(0.1, -direction.z)          # cos of incidence on flat ground
+        current = ((sun.energy if sun else 0.0) * elevation
+                   + props.sky_strength * SKY_IRRADIANCE_PER_STRENGTH)
+        if current <= 1e-6:
+            self.report({"ERROR"}, "no sun or sky to scale")
+            return {"CANCELLED"}
+
+        factor = needed / current
+        props.sun_strength = max(0.0, (sun.energy if sun else 0.0) * factor)
+        props.sky_strength = max(0.0, props.sky_strength * factor)
+        if sun:
+            sun.energy = props.sun_strength
+        world = context.scene.world
+        if world and world.use_nodes:
+            for node in world.node_tree.nodes:
+                if node.type == "BACKGROUND":
+                    node.inputs["Strength"].default_value = props.sky_strength
+
+        self.report({"INFO"},
+                    f"plate ground reads {measured:.3f}; at albedo "
+                    f"{props.assumed_albedo:.2f} that needs {needed:.1f} irradiance. "
+                    f"Scaled lights by {factor:.2f} -> sun {props.sun_strength:.2f}, "
+                    f"sky {props.sky_strength:.2f}")
+        return {"FINISHED"}
+
+
 class PHOTO3D_OT_calibrate_bounce(bpy.types.Operator):
     """Solve the emission multiplier from the plate instead of guessing it"""
     bl_idname = "photo3d.calibrate_bounce"
@@ -561,8 +637,9 @@ class PHOTO3D_OT_load_panorama(bpy.types.Operator):
         return {"FINISHED"}
 
 
-CLASSES = (PHOTO3D_OT_bounce_proxy, PHOTO3D_OT_toggle_bounce, PHOTO3D_OT_calibrate_bounce,
-           PHOTO3D_OT_fetch_shade_mask, PHOTO3D_OT_bake_gobo, PHOTO3D_OT_load_panorama)
+CLASSES = (PHOTO3D_OT_calibrate_exposure, PHOTO3D_OT_bounce_proxy, PHOTO3D_OT_toggle_bounce,
+           PHOTO3D_OT_calibrate_bounce, PHOTO3D_OT_fetch_shade_mask, PHOTO3D_OT_bake_gobo,
+           PHOTO3D_OT_load_panorama)
 
 
 def register():

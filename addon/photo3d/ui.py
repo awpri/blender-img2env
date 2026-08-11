@@ -175,6 +175,11 @@ class PHOTO3D_PT_sun(Photo3DPanel, bpy.types.Panel):
         column.prop(props, "sun_strength")
         column.prop(props, "sky_strength")
         column.prop(props, "sky_rotation_offset")
+        self.layout.operator("photo3d.calibrate_exposure", icon="LIGHT_SUN")
+        note = self.layout.column(align=True)
+        note.scale_y = 0.8
+        note.label(text="The 4.0/1.0 defaults are arbitrary and")
+        note.label(text="put CG several stops over the plate.")
 
         if props.solved and props.solved_heading == 0.0:
             box = self.layout.box()
@@ -203,6 +208,32 @@ class PHOTO3D_PT_gobo(Photo3DPanel, bpy.types.Panel):
         column.prop(props, "gobo_distance")
         column.prop(props, "gobo_res")
         layout.operator("photo3d.bake_gobo", icon="RENDER_STILL")
+
+
+class PHOTO3D_PT_materials(Photo3DPanel, bpy.types.Panel):
+    bl_label = "Surface Materials"
+    bl_parent_id = "PHOTO3D_PT_main"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        column = layout.column(align=True)
+        column.scale_y = 0.8
+        column.label(text="The proxy is one matte surface. Mark")
+        column.label(text="glass, water or metal so CG behind it")
+        column.label(text="is seen through it and reflects it.")
+
+        layout.operator("photo3d.edit_proxy", icon="EDITMODE_HLT")
+        if context.mode == "EDIT_MESH":
+            box = layout.box()
+            box.label(text="Select faces, then:", icon="FACESEL")
+            grid = box.grid_flow(columns=2, align=True)
+            from .materials import PRESETS
+            for ident, label, _ in PRESETS:
+                grid.operator("photo3d.split_material_region",
+                              text=label).kind = ident
+        else:
+            layout.label(text="(enter Edit Mode to mark a region)", icon="INFO")
 
 
 class PHOTO3D_PT_panorama(Photo3DPanel, bpy.types.Panel):
@@ -252,7 +283,8 @@ def _wrap(text: str, width: int) -> list[str]:
 
 
 CLASSES = (PHOTO3D_PT_main, PHOTO3D_PT_camera, PHOTO3D_PT_proxy, PHOTO3D_PT_bounce,
-           PHOTO3D_PT_sun, PHOTO3D_PT_gobo, PHOTO3D_PT_panorama, PHOTO3D_PT_minecraft)
+           PHOTO3D_PT_sun, PHOTO3D_PT_gobo, PHOTO3D_PT_materials, PHOTO3D_PT_panorama,
+           PHOTO3D_PT_minecraft)
 
 
 def register():
