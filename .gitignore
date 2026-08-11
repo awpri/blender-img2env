@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+photo3d.zip
+.pytest_cache/
+.venv/
+venv/
+
+# Blender
+*.blend1
+*.blend2
+
+# Solver cache — plates, depth maps and masks are regenerable
+.cache/
+*.npy
+*.exr
+!server/tests/fixtures/*.npy
+
+# Photos are large and personal; keep them out of the repo
+*.DNG
+*.dng
+*.HEIC
+*.heic
+*.CR2
+*.ARW
+
+.DS_Store
+
+# Claude Code local machine settings
+.claude/settings.local.json

@@ -1,0 +1,43 @@
+[project]
+name = "photo3d-solver"
+version = "0.4.0"
+description = "Offline photo-to-3D solve daemon: EXIF camera solve, metric depth, image-derived lighting"
+requires-python = ">=3.11"
+
+# Deliberately minimal. The heavy dependencies are optional because the whole
+# point of milestone M1 is that the camera solve needs no ML at all, and the
+# test suite must run without 1.9 GB of weights.
+dependencies = [
+    "numpy>=1.24",
+    "fastapi>=0.110",
+    "uvicorn>=0.27",
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+# Metric depth. The backbone — nothing collides without it.
+depth = [
+    "torch>=2.2",
+    "torchvision",
+    # pip install git+https://github.com/apple/ml-depth-pro.git
+]
+# Marigold's micro-detail, fitted onto Depth Pro's scale.
+refine = ["diffusers>=0.27", "transformers", "accelerate"]
+# ProRAW -> linear EXR. opencv-python is here for its EXR writer.
+raw = ["rawpy>=0.19", "opencv-python>=4.9", "pillow-heif>=0.15"]
+# Intrinsic decomposition for the sun gobo.
+# pip install git+https://github.com/compphoto/Intrinsic.git
+shading = []
+dev = ["pytest>=8.0", "httpx", "astral>=3.2"]
+
+[project.scripts]
+photo3d-solver = "server.solver_server:main"
+
+[tool.pytest.ini_options]
+testpaths = ["server/tests"]
+# addon/ so the shared bpy-free core (coords, imaging) imports as `photo3d`.
+pythonpath = [".", "addon"]
+filterwarnings = ["ignore::DeprecationWarning:starlette.*"]
+
+[tool.setuptools]
+packages = ["server"]

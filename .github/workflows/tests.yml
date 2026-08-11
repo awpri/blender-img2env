@@ -1,0 +1,42 @@
+name: tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      # No torch, no rawpy, no Blender. The suite is built so the coordinate
+      # maths, the EXIF solve and the HTTP contract all run without them —
+      # anything that needs a model skips itself.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Test
+        run: pytest server/tests -q
+
+      # The add-on may only import bpy, mathutils, numpy and stdlib. This is
+      # the same check test_addon.py makes, run again at package time.
+      - name: Build add-on zip
+        run: python tools/build_addon_zip.py
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.python-version == '3.12'
+        with:
+          name: photo3d-addon
+          path: photo3d.zip
