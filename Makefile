@@ -15,6 +15,7 @@ help:
 	@echo "make addon    build photo3d.zip for Blender's Install from Disk"
 	@echo "make test     run the test suite (no Blender, no torch, ~9s)"
 	@echo "make smoke    register the add-on in a real Blender and exercise it"
+	@echo "make install-test  install the zip and verify every button survives"
 	@echo "make render-checks  render small images and measure the light"
 	@echo "make clean    remove build artefacts and __pycache__"
 	@echo
@@ -59,6 +60,11 @@ test:
 
 smoke:
 	$(BLENDER) --background --factory-startup --python tools/blender_smoke_test.py
+
+# Installs the zip into a throwaway profile, so it never touches a real config.
+install-test: addon
+	BLENDER_USER_RESOURCES=$$(mktemp -d) \
+	  $(BLENDER) --background --python tools/addon_install_test.py
 
 # Actually renders. Wiring can be perfect and the picture still wrong, because
 # Cycles decides what a shadow catcher and a Transparent BSDF mean together.

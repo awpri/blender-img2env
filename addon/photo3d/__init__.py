@@ -31,6 +31,36 @@ try:
 except ModuleNotFoundError:      # imported by the server or by pytest
     _IN_BLENDER = False
 
+#: Every submodule, in dependency order. Reloaded as a group on re-enable.
+_SUBMODULE_NAMES = ("coords", "imaging", "props", "solve", "proxy", "materials",
+                    "radiance", "ui")
+
+
+def _reload_stale_submodules():
+    """Re-import submodules that Python has cached from an earlier install.
+
+    Installing a new version into a RUNNING Blender otherwise appears to do
+    almost nothing. Blender notices this file changed on disk and reloads it —
+    so bl_info updates and the version number in the panel goes up — but
+    `from . import ui` then returns whatever is already in sys.modules, which
+    is the previous version's code. The result is a add-on that reports the new
+    version while running the old panels and operators, which is a genuinely
+    baffling thing to debug from the outside.
+
+    Reloading here is safe because Blender calls unregister() before it
+    re-enables, so no stale classes are still registered when this runs.
+    """
+    import importlib
+    import sys
+
+    for name in _SUBMODULE_NAMES:
+        cached = sys.modules.get(f"{__name__}.{name}")
+        if cached is not None:
+            importlib.reload(cached)
+
+
+_reload_stale_submodules()
+
 from . import coords, imaging  # noqa: E402,F401  (bpy-free, always safe)
 
 if _IN_BLENDER:
