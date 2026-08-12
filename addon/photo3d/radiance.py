@@ -229,34 +229,137 @@ class PHOTO3D_OT_toggle_bounce(bpy.types.Operator):
         return {"FINISHED"}
 
 
-#: Roughly how much irradiance a Nishita sky puts on a horizontal surface per
-#: unit of Background strength, with the sun well up. An approximation — the
-#: real figure depends on sun elevation and turbidity — but it only has to get
-#: the exposure into the right neighbourhood, and it preserves whatever sun/sky
-#: ratio the user has dialled in.
-SKY_IRRADIANCE_PER_STRENGTH = 2.0
+def measure_ground_irradiance(context) -> float:
+    """Render a white probe on the ground and read the irradiance off it.
+
+    The previous version multiplied the sky strength by a guessed constant for
+    "how much irradiance a Nishita sky delivers". That guess was wrong enough
+    that the answer depended almost entirely on whatever sky strength you had
+    dialled in, which is precisely the knob it was supposed to be solving.
+
+    So measure instead. A white Lambertian surface under irradiance E has
+    radiance E/pi, so one tiny render of a matte white card gives E exactly —
+    no sky model, no sun-angle term, and correct for whatever combination of
+    lamps, sky and bounce happens to be in the scene.
+
+    The proxy is left visible on purpose: it occludes, so a probe under a
+    station canopy measures the shaded irradiance, which is what the plate's
+    ground brightness there actually corresponds to.
+    """
+    scene = context.scene
+    probe = None
+    camera = None
+    material = None
+    saved = {
+        "camera": scene.camera,
+        "filepath": scene.render.filepath,
+        "resolution_x": scene.render.resolution_x,
+        "resolution_y": scene.render.resolution_y,
+        "percentage": scene.render.resolution_percentage,
+        "film_transparent": scene.render.film_transparent,
+        "samples": scene.cycles.samples,
+        "view_transform": scene.view_settings.view_transform,
+        "look": scene.view_settings.look,
+        "exposure": scene.view_settings.exposure,
+        "gamma": scene.view_settings.gamma,
+    }
+    has_group = hasattr(scene, "compositing_node_group")
+    saved["compositor"] = scene.compositing_node_group if has_group else scene.use_nodes
+
+    try:
+        material = bpy.data.materials.new("Photo3D_Probe")
+        material.use_nodes = True
+        tree = material.node_tree
+        tree.nodes.clear()
+        output = tree.nodes.new("ShaderNodeOutputMaterial")
+        diffuse = tree.nodes.new("ShaderNodeBsdfDiffuse")
+        diffuse.inputs["Color"].default_value = (1.0, 1.0, 1.0, 1.0)
+        tree.links.new(diffuse.outputs["BSDF"], output.inputs["Surface"])
+
+        mesh = bpy.data.meshes.new("Photo3D_Probe")
+        size = 0.25
+        mesh.from_pydata([(-size, -size, 0.0), (size, -size, 0.0),
+                          (size, size, 0.0), (-size, size, 0.0)], [], [(0, 1, 2, 3)])
+        mesh.update()
+        probe = bpy.data.objects.new("Photo3D_Probe", mesh)
+        probe.data.materials.append(material)
+        # A hair above the ground plane so it is not co-planar with it.
+        probe.location = (0.0, 0.0, 0.002)
+        scene.collection.objects.link(probe)
+
+        camera_data = bpy.data.cameras.new("Photo3D_ProbeCam")
+        camera_data.type = "ORTHO"
+        camera_data.ortho_scale = size
+        camera = bpy.data.objects.new("Photo3D_ProbeCam", camera_data)
+        scene.collection.objects.link(camera)
+        camera.location = (0.0, 0.0, 0.35)          # looking straight down
+        camera.rotation_euler = (0.0, 0.0, 0.0)
+
+        scene.camera = camera
+        scene.render.resolution_x = scene.render.resolution_y = 32
+        scene.render.resolution_percentage = 100
+        scene.render.film_transparent = False
+        scene.cycles.samples = 24
+        # The probe is a measurement, so no view transform may touch it.
+        scene.view_settings.view_transform = "Standard"
+        scene.view_settings.look = "None"
+        scene.view_settings.exposure = 0.0
+        scene.view_settings.gamma = 1.0
+        if has_group:
+            scene.compositing_node_group = None
+        else:
+            scene.use_nodes = False
+
+        import os
+        path = os.path.join(bpy.app.tempdir, "photo3d_probe.exr")
+        scene.render.filepath = path
+        scene.render.image_settings.file_format = "OPEN_EXR"
+        scene.render.image_settings.color_depth = "32"
+        bpy.ops.render.render(write_still=True)
+
+        image = bpy.data.images.load(path, check_existing=False)
+        buffer = np.empty(image.size[0] * image.size[1] * 4, dtype=np.float32)
+        image.pixels.foreach_get(buffer)
+        bpy.data.images.remove(image)
+        radiance = float(np.median(
+            imaging.luminance(buffer.reshape(-1, 4)[:, :3].reshape(1, -1, 3))))
+        return radiance * float(np.pi)
+    finally:
+        scene.camera = saved["camera"]
+        scene.render.filepath = saved["filepath"]
+        scene.render.resolution_x = saved["resolution_x"]
+        scene.render.resolution_y = saved["resolution_y"]
+        scene.render.resolution_percentage = saved["percentage"]
+        scene.render.film_transparent = saved["film_transparent"]
+        scene.cycles.samples = saved["samples"]
+        scene.view_settings.view_transform = saved["view_transform"]
+        scene.view_settings.look = saved["look"]
+        scene.view_settings.exposure = saved["exposure"]
+        scene.view_settings.gamma = saved["gamma"]
+        if has_group:
+            scene.compositing_node_group = saved["compositor"]
+        else:
+            scene.use_nodes = saved["compositor"]
+        for datablock, collection in ((probe, bpy.data.objects),
+                                      (camera, bpy.data.objects),
+                                      (material, bpy.data.materials)):
+            if datablock is not None:
+                collection.remove(datablock, do_unlink=True)
 
 
 class PHOTO3D_OT_calibrate_exposure(bpy.types.Operator):
-    """Match CG brightness to the photograph, instead of guessing at 4.0"""
+    """Match CG brightness to the photograph, by measuring not guessing"""
     bl_idname = "photo3d.calibrate_exposure"
     bl_label = "Match Exposure to Plate"
     bl_options = {"REGISTER", "UNDO"}
 
     def execute(self, context):
-        """Solve the light strengths from the plate's own brightness.
+        """Scale the lights so a surface of the assumed albedo renders as
+        bright as the same surface looks in the photograph.
 
-        The sun and sky defaults are arbitrary numbers, and arbitrary numbers
-        put CG objects several stops brighter than the photograph they are
-        standing in — which reads as "the compositing does not work" rather
-        than "the key light is too strong". Nothing else in the pipeline tells
-        you, because every other check is geometric.
-
-        For a Lambertian surface, radiance = irradiance * albedo / pi. The
-        plate says what radiance the real ground has; the albedo is assumed
-        (the same number the bounce calibration uses); so the irradiance the
-        scene needs follows. Both strengths are then scaled by one factor,
-        which preserves the sun-to-sky ratio.
+        radiance = irradiance * albedo / pi, so the plate's ground brightness
+        says what irradiance the scene needs, a probe render says what it
+        currently has, and the ratio is the correction. The pi cancels.
         """
         props = context.scene.photo3d
         proxy_obj = bpy.data.objects.get("Photo3D_Proxy")
@@ -267,41 +370,60 @@ class PHOTO3D_OT_calibrate_exposure(bpy.types.Operator):
 
         pixels = image_to_array(plate, 256)
         ground = pixels[pixels.shape[0] // 2:]          # lower half is the ground
-        measured = float(np.median(imaging.luminance(ground)))
-        if measured <= 1e-5:
+        plate_luminance = float(np.median(imaging.luminance(ground)))
+        if plate_luminance <= 1e-5:
             self.report({"ERROR"}, "the plate's ground reads as black; cannot calibrate")
             return {"CANCELLED"}
 
-        needed = measured * np.pi / max(props.assumed_albedo, 1e-3)
-
         sun = bpy.data.lights.get("Photo3D_Sun")
-        elevation = 1.0
-        sun_info_obj = bpy.data.objects.get("Photo3D_Sun")
-        if sun_info_obj is not None:
-            direction = sun_info_obj.matrix_world.to_quaternion() @ Vector((0, 0, -1))
-            elevation = max(0.1, -direction.z)          # cos of incidence on flat ground
-        current = ((sun.energy if sun else 0.0) * elevation
-                   + props.sky_strength * SKY_IRRADIANCE_PER_STRENGTH)
-        if current <= 1e-6:
-            self.report({"ERROR"}, "no sun or sky to scale")
+        try:
+            total = measure_ground_irradiance(context)
+            if sun is not None and sun.energy > 0.0:
+                held = sun.energy
+                try:
+                    sun.energy = 0.0
+                    sky_only = measure_ground_irradiance(context)
+                finally:
+                    sun.energy = held
+            else:
+                sky_only = total
+        except Exception as exc:                                  # noqa: BLE001
+            self.report({"ERROR"}, f"probe render failed: {exc}")
+            return {"CANCELLED"}
+        if total <= 1e-6:
+            self.report({"ERROR"}, "the scene delivers no light at ground level — "
+                                   "is there a sun or a sky?")
             return {"CANCELLED"}
 
-        factor = needed / current
-        props.sun_strength = max(0.0, (sun.energy if sun else 0.0) * factor)
-        props.sky_strength = max(0.0, props.sky_strength * factor)
-        if sun:
-            sun.energy = props.sun_strength
-        world = context.scene.world
-        if world and world.use_nodes:
-            for node in world.node_tree.nodes:
-                if node.type == "BACKGROUND":
-                    node.inputs["Strength"].default_value = props.sky_strength
+        # Two probes give the per-unit response of each light separately, which
+        # is what makes the SPLIT solvable and not just the total. Measured on
+        # the station plate: a physical sky delivers ~42 irradiance per unit of
+        # Background strength, so the 1.0 default was pouring four times more
+        # ambient into the scene than the sun was putting in. Light from every
+        # direction at once casts no shadow, which is why objects looked lit but
+        # cast nothing — the geometry was never the problem.
+        sun_contribution = max(0.0, total - sky_only)
+        sun_per_unit = (sun_contribution / sun.energy) if (sun and sun.energy > 0) else 0.0
+        sky_per_unit = (sky_only / props.sky_strength) if props.sky_strength > 0 else 0.0
+
+        needed = plate_luminance * float(np.pi) / max(props.assumed_albedo, 1e-3)
+        share = float(np.clip(props.sun_share, 0.0, 1.0))
+        if sun_per_unit <= 1e-9:
+            share = 0.0                       # no usable sun; put it all in the sky
+
+        if share > 0.0 and sun_per_unit > 1e-9:
+            props.sun_strength = needed * share / sun_per_unit
+        elif sun is not None:
+            props.sun_strength = 0.0
+        if sky_per_unit > 1e-9:
+            props.sky_strength = needed * (1.0 - share) / sky_per_unit
 
         self.report({"INFO"},
-                    f"plate ground reads {measured:.3f}; at albedo "
-                    f"{props.assumed_albedo:.2f} that needs {needed:.1f} irradiance. "
-                    f"Scaled lights by {factor:.2f} -> sun {props.sun_strength:.2f}, "
-                    f"sky {props.sky_strength:.2f}")
+                    f"ground needs {needed:.1f} (plate {plate_luminance:.3f}, albedo "
+                    f"{props.assumed_albedo:.2f}). Measured {sun_per_unit:.2f} per unit "
+                    f"of sun and {sky_per_unit:.1f} per unit of sky -> sun "
+                    f"{props.sun_strength:.2f}, sky {props.sky_strength:.4f} at a "
+                    f"{share:.0%} direct share")
         return {"FINISHED"}
 
 

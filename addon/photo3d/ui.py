@@ -181,12 +181,23 @@ class PHOTO3D_PT_sun(Photo3DPanel, bpy.types.Panel):
         column = self.layout.column(align=True)
         column.prop(props, "sun_strength")
         column.prop(props, "sky_strength")
-        column.prop(props, "sky_rotation_offset")
+        column.prop(props, "sun_share")
         self.layout.operator("photo3d.calibrate_exposure", icon="LIGHT_SUN")
         note = self.layout.column(align=True)
         note.scale_y = 0.8
-        note.label(text="The 4.0/1.0 defaults are arbitrary and")
-        note.label(text="put CG several stops over the plate.")
+        note.label(text="Measures both lights, then sets total")
+        note.label(text="brightness AND the split. Low sun")
+        note.label(text="share = ambient = no shadows.")
+
+        box = self.layout.box()
+        box.label(text="Shadow direction", icon="LIGHT_SUN")
+        aim = box.column(align=True)
+        aim.scale_y = 0.8
+        aim.label(text="If CG shadows do not run parallel")
+        aim.label(text="to the real ones, the compass was")
+        aim.label(text="wrong — steel buildings, cars. Turn:")
+        box.prop(props, "sun_azimuth_offset")
+        box.prop(props, "sky_rotation_offset")
 
         if props.solved and props.solved_heading == 0.0:
             box = self.layout.box()
@@ -223,6 +234,7 @@ class PHOTO3D_PT_materials(Photo3DPanel, bpy.types.Panel):
     bl_options = {"DEFAULT_CLOSED"}
 
     def draw(self, context):
+        props = context.scene.photo3d
         layout = self.layout
         column = layout.column(align=True)
         column.scale_y = 0.8

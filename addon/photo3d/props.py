@@ -14,6 +14,7 @@ from __future__ import annotations
 from math import radians
 
 import bpy
+from mathutils import Vector
 from bpy.props import (BoolProperty, EnumProperty, FloatProperty, IntProperty,
                        StringProperty)
 
@@ -53,17 +54,48 @@ def _update_sky_strength(self, context):
             node.inputs["Strength"].default_value = self.sky_strength
 
 
-def _update_sky_rotation(self, context):
-    """Re-derive the sky's rotation from the solved azimuth plus the offset.
+def _effective_sun_azimuth(props) -> float:
+    """Where the sun actually is, after the user's correction."""
+    return props.solved_sun_azimuth + props.sun_azimuth_offset
 
-    The offset is a calibration constant, so it has to be applied to the
-    measured azimuth rather than accumulated onto whatever is already there.
+
+def _update_sky_rotation(self, context):
+    """Re-derive the sky's rotation from the solved azimuth plus the offsets.
+
+    Offsets are calibration constants, so they are applied to the measured
+    azimuth rather than accumulated onto whatever is already there.
     """
     tree = _world_nodes(context)
     for node in (tree.nodes if tree else []):
         if node.type == "TEX_SKY":
-            node.sun_rotation = -radians(self.solved_sun_azimuth) + radians(
+            node.sun_rotation = -radians(_effective_sun_azimuth(self)) + radians(
                 self.sky_rotation_offset)
+
+
+def _update_sun_direction(self, context):
+    """Re-aim the sun lamp, and bring the sky round with it.
+
+    The ephemeris knows where the sun was to arcminutes; what it cannot know is
+    which way the camera faced. That comes from GPSImgDirection, a magnetometer,
+    and a magnetometer inside a steel railway station or beside a car is simply
+    wrong — by tens of degrees, not the 5-15 the specification promises. When
+    the CG shadows do not run parallel to the real ones in the plate, this is
+    the knob: turn it until they do. Everything else about the solve stays put.
+    """
+    from math import asin, cos, degrees, sin
+
+    lamp = bpy.data.objects.get("Photo3D_Sun")
+    if lamp is None:
+        return
+    azimuth = radians(_effective_sun_azimuth(self))
+    elevation = radians(self.solved_sun_elevation)
+    to_sun = Vector((sin(azimuth) * cos(elevation),
+                     cos(azimuth) * cos(elevation),
+                     sin(elevation)))
+    lamp.location = to_sun * 100.0
+    lamp.rotation_mode = "QUATERNION"
+    lamp.rotation_quaternion = Vector((0.0, 0.0, -1.0)).rotation_difference(-to_sun)
+    _update_sky_rotation(self, context)
 
 
 def _bounce_nodes():
@@ -170,6 +202,19 @@ class Photo3DProps(bpy.types.PropertyGroup):
                                 update=_update_sun_strength)
     sky_strength: FloatProperty(name="Sky strength", default=1.0, min=0.0,
                                 update=_update_sky_strength)
+    sun_share: FloatProperty(
+        name="Direct sun share", default=0.85, min=0.0, max=1.0,
+        description="Fraction of the ground's light that comes from the sun "
+                    "rather than the sky. THIS is what decides whether shadows "
+                    "exist: light from every direction at once casts none. "
+                    "0.85 hard sun, 0.6 hazy, 0.2 overcast, 0.0 no sun at all")
+    sun_azimuth_offset: FloatProperty(
+        name="Sun azimuth offset", default=0.0, min=-180.0, max=180.0,
+        update=_update_sun_direction,
+        description="Turn the sun until CG shadows run parallel to the real "
+                    "ones in the photo. The ephemeris is exact; the COMPASS is "
+                    "not, and a magnetometer inside a steel station or beside a "
+                    "car can be tens of degrees out")
     sky_rotation_offset: FloatProperty(
         name="Sky rotation offset", default=0.0, min=-360.0, max=360.0,
         update=_update_sky_rotation,
@@ -240,6 +285,7 @@ class Photo3DProps(bpy.types.PropertyGroup):
     solved_confidence: FloatProperty(default=0.0)
     solved_focal: FloatProperty(default=0.0)
     solved_sun_azimuth: FloatProperty(default=0.0)
+    solved_sun_elevation: FloatProperty(default=0.0)
     solved_orientation_source: StringProperty(default="")
     solved_warnings: StringProperty(default="")
     plate_png: StringProperty(default="")

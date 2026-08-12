@@ -99,6 +99,55 @@ def main() -> int:
     def _():
         assert bpy.context.scene.photo3d.depth_long_edge == 1536
 
+    @check("every panel draws without raising")
+    def _():
+        """Panel draw() only runs when a user opens that section, so a
+        NameError in one sits there undetected — the section simply appears
+        empty and its buttons never exist. Registering the class proves
+        nothing; the body has to be executed.
+
+        Driven with a stub layout rather than a real region because background
+        Blender has no UI to draw into. It exercises the Python, which is where
+        this class of bug lives.
+        """
+        class Stub:
+            """Absorbs any layout call and any attribute assignment.
+
+            `layout.operator(...).kind = "GLASS"` has to keep working, so calls
+            return another Stub and setattr is a no-op.
+            """
+            def __getattr__(self, name):
+                return lambda *args, **kwargs: Stub()
+
+            def __setattr__(self, name, value):
+                pass
+
+        class Ctx:
+            scene = bpy.context.scene
+            active_object = bpy.context.active_object
+            object = bpy.context.object
+            mode = "OBJECT"
+
+        panels = [c for c in bpy.types.Panel.__subclasses__()
+                  if getattr(c, "bl_category", None) == "Photo3D"]
+        assert panels, "no Photo3D panels registered"
+
+        problems = []
+        for cls in panels:
+            for mode in ("OBJECT", "EDIT_MESH"):
+                Ctx.mode = mode
+                # draw() is an ordinary Python function; a Panel subclass cannot
+                # be instantiated outside Blender's UI, so call it unbound with
+                # a stand-in that only needs a .layout.
+                stand_in = Stub()
+                object.__setattr__(stand_in, "layout", Stub())
+                try:
+                    cls.draw(stand_in, Ctx)
+                except Exception as exc:                          # noqa: BLE001
+                    problems.append(f"{cls.__name__} [{mode}]: "
+                                    f"{type(exc).__name__}: {exc}")
+        assert not problems, "panels raised while drawing:\n    " + "\n    ".join(problems)
+
     solve = synthetic_solve(tmp)
     scene = bpy.context.scene
     props = scene.photo3d
