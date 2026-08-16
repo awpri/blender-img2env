@@ -437,8 +437,125 @@ class PHOTO3D_OT_align_view(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PHOTO3D_OT_reset_camera(bpy.types.Operator):
+    """Put the solved camera back where the solve put it"""
+    bl_idname = "photo3d.reset_camera"
+    bl_label = "Reset Camera to Solve"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        return bpy.data.objects.get("Photo3D_Cam") is not None
+
+    def execute(self, context):
+        """Rebuild the camera matrix from the stored solve.
+
+        Nudging the camera in the viewport is easy to do by accident and
+        silently ruins everything downstream: the proxy was parked on the
+        camera's matrix at build time, so moving the camera slides the whole
+        photograph out of alignment with its own geometry.
+        """
+        props = context.scene.photo3d
+        camera = bpy.data.objects["Photo3D_Cam"]
+        gravity = coords.gravity_from_pitch_roll(props.solved_pitch, props.solved_roll)
+        heading = props.solved_heading if props.use_heading else None
+        matrix = coords.camera_matrix(gravity, heading, props.solved_height,
+                                      fallback_heading_deg=props.fallback_heading)
+        camera.matrix_world = Matrix([list(row) for row in matrix])
+        context.scene.camera = camera
+        self.report({"INFO"}, f"camera restored: pitch {props.solved_pitch:+.2f}, "
+                              f"roll {props.solved_roll:+.2f}, heading "
+                              f"{props.solved_heading:.1f}, height {props.solved_height:.2f} m")
+        return {"FINISHED"}
+
+
+class PHOTO3D_OT_diagnose(bpy.types.Operator):
+    """Check everything a correct render depends on, and say what is wrong"""
+    bl_idname = "photo3d.diagnose"
+    bl_label = "Diagnose Render Setup"
+
+    def execute(self, context):
+        """Report the render preconditions rather than making the user guess.
+
+        Every item here has actually been the cause of "it renders but there is
+        no photograph" at some point, and none of them is visible by looking at
+        the viewport.
+        """
+        scene = context.scene
+        problems, notes = [], []
+
+        if scene.render.engine != "CYCLES":
+            problems.append(f"engine is {scene.render.engine}, not CYCLES — the proxy "
+                            "shader relies on Is Camera Ray, which EEVEE treats differently")
+        if not scene.render.film_transparent:
+            problems.append("Film > Transparent is OFF, so the render has no alpha and "
+                            "the plate cannot show through behind it")
+        if not scene.render.use_compositing:
+            problems.append("Post Processing > Compositing is OFF — this is what lays "
+                            "the render over the photograph. THE PLATE WILL NOT APPEAR")
+
+        tree = (scene.compositing_node_group
+                if hasattr(scene, "compositing_node_group") else
+                (scene.node_tree if scene.use_nodes else None))
+        if tree is None:
+            problems.append("no compositor node tree — re-run Solve Photo, which builds it")
+        else:
+            image_nodes = [n for n in tree.nodes if n.type == "IMAGE"]
+            if not image_nodes:
+                problems.append("compositor has no Image node; re-run Solve Photo")
+            elif not any(n.image for n in image_nodes):
+                problems.append("the compositor's Image node has no image loaded")
+            else:
+                plate = image_nodes[0].image
+                notes.append(f"plate {plate.name} {plate.size[0]}x{plate.size[1]}")
+                if tuple(plate.size) == (0, 0):
+                    problems.append(f"plate {plate.name} failed to load from disk — "
+                                    f"missing file at {plate.filepath}")
+            if not any(n.type == "SCALE" for n in tree.nodes):
+                problems.append("no Scale node: the plate will be pasted at its own "
+                                "resolution and you will see a centre crop")
+            outputs = [n for n in tree.nodes if n.type in {"GROUP_OUTPUT", "COMPOSITE"}]
+            if not outputs:
+                problems.append("compositor has no output node")
+            elif not any(s.links for s in outputs[0].inputs):
+                problems.append("nothing is connected to the compositor output")
+
+        proxies = [o for o in scene.objects if o.is_shadow_catcher]
+        if not proxies:
+            problems.append("no shadow catcher in the scene — nothing can receive a "
+                            "CG shadow onto the photograph")
+        else:
+            notes.append(f"{len(proxies)} shadow catcher(s)")
+
+        sun = bpy.data.objects.get("Photo3D_Sun")
+        if sun is None:
+            problems.append("no Photo3D_Sun — without a light there is no shadow")
+        else:
+            notes.append(f"sun {sun.data.energy:.2f}, sky {context.scene.photo3d.sky_strength:.4f}")
+
+        casters = [o for o in scene.objects if o.type == "MESH"
+                   and not o.is_shadow_catcher and o.visible_shadow
+                   and not o.name.startswith("Photo3D_")]
+        if not casters:
+            problems.append("no object that casts a shadow — add your model, and check "
+                            "it is not itself marked as a shadow catcher")
+        else:
+            notes.append(f"{len(casters)} shadow caster(s): "
+                         + ", ".join(o.name for o in casters[:3]))
+
+        for line in notes:
+            self.report({"INFO"}, line)
+        for line in problems:
+            self.report({"ERROR"}, line)
+        if not problems:
+            self.report({"INFO"}, "render setup looks correct — if the plate still does "
+                                  "not appear, check the Image Editor is showing "
+                                  "'Composite' and not 'View Layer'")
+        return {"FINISHED"}
+
+
 CLASSES = (PHOTO3D_OT_check_server, PHOTO3D_OT_solve, PHOTO3D_OT_solve_metadata_only,
-           PHOTO3D_OT_align_view)
+           PHOTO3D_OT_align_view, PHOTO3D_OT_reset_camera, PHOTO3D_OT_diagnose)
 
 
 def register():

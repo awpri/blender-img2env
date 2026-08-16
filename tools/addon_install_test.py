@@ -39,6 +39,7 @@ EXPECTED_OPS = {
     "calibrate_exposure", "calibrate_bounce", "bounce_proxy", "toggle_bounce",
     "fetch_shade_mask", "bake_gobo", "load_panorama",
     "edit_proxy", "split_material_region", "segment_proxy",
+    "reset_camera", "diagnose",
 }
 EXPECTED_PANELS = {
     "PHOTO3D_PT_main", "PHOTO3D_PT_camera", "PHOTO3D_PT_proxy",

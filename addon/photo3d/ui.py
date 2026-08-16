@@ -78,7 +78,10 @@ class PHOTO3D_PT_main(Photo3DPanel, bpy.types.Panel):
                 for line in _wrap(message, 44):
                     box.label(text=line)
 
-        layout.operator("photo3d.align_view", icon="VIEW_CAMERA")
+        row = layout.row(align=True)
+        row.operator("photo3d.align_view", icon="VIEW_CAMERA")
+        row.operator("photo3d.reset_camera", text="", icon="LOOP_BACK")
+        layout.operator("photo3d.diagnose", icon="VIEWZOOM")
 
 
 class PHOTO3D_PT_camera(Photo3DPanel, bpy.types.Panel):

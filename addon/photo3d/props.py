@@ -98,6 +98,25 @@ def _update_sun_direction(self, context):
     _update_sky_rotation(self, context)
 
 
+def _update_sun_share(self, context):
+    """Re-split the measured light between sun and sky, keeping the total.
+
+    Calibration caches what each light delivers per unit, so this is instant
+    and needs no re-probe. It is the knob for shadow strength: turning it down
+    softens shadows by moving light into the ambient, and because the TOTAL is
+    held constant the objects do not get brighter as it moves. Adjusting sky
+    strength by hand instead changes the total, which is why doing that made
+    the cube glow.
+    """
+    if self.measured_needed <= 0.0:
+        return                                  # never calibrated; nothing to split
+    share = min(max(self.sun_share, 0.0), 1.0)
+    if self.measured_sun_per_unit > 1e-9:
+        self.sun_strength = self.measured_needed * share / self.measured_sun_per_unit
+    if self.measured_sky_per_unit > 1e-9:
+        self.sky_strength = self.measured_needed * (1.0 - share) / self.measured_sky_per_unit
+
+
 def _bounce_nodes():
     bounce = bpy.data.objects.get("Photo3D_Bounce")
     if bounce is None or not bounce.material_slots:
@@ -200,10 +219,15 @@ class Photo3DProps(bpy.types.PropertyGroup):
     # --- lighting --------------------------------------------------------
     sun_strength: FloatProperty(name="Sun strength", default=4.0, min=0.0,
                                 update=_update_sun_strength)
-    sky_strength: FloatProperty(name="Sky strength", default=1.0, min=0.0,
-                                update=_update_sky_strength)
+    sky_strength: FloatProperty(
+        name="Sky strength", default=1.0, min=0.0, precision=4, step=1,
+        update=_update_sky_strength,
+        description="A physical sky delivers roughly 40x more irradiance per "
+                    "unit than this number suggests, so calibrated values are "
+                    "small — around 0.05. Prefer Direct sun share")
     sun_share: FloatProperty(
         name="Direct sun share", default=0.85, min=0.0, max=1.0,
+        update=_update_sun_share,
         description="Fraction of the ground's light that comes from the sun "
                     "rather than the sky. THIS is what decides whether shadows "
                     "exist: light from every direction at once casts none. "
@@ -286,6 +310,10 @@ class Photo3DProps(bpy.types.PropertyGroup):
     solved_focal: FloatProperty(default=0.0)
     solved_sun_azimuth: FloatProperty(default=0.0)
     solved_sun_elevation: FloatProperty(default=0.0)
+    # what the last probe measured, so sun_share can re-split without re-probing
+    measured_sun_per_unit: FloatProperty(default=0.0)
+    measured_sky_per_unit: FloatProperty(default=0.0)
+    measured_needed: FloatProperty(default=0.0)
     solved_orientation_source: StringProperty(default="")
     solved_warnings: StringProperty(default="")
     plate_png: StringProperty(default="")

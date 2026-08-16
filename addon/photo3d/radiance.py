@@ -407,6 +407,10 @@ class PHOTO3D_OT_calibrate_exposure(bpy.types.Operator):
         sky_per_unit = (sky_only / props.sky_strength) if props.sky_strength > 0 else 0.0
 
         needed = plate_luminance * float(np.pi) / max(props.assumed_albedo, 1e-3)
+        # Cached so Direct sun share can re-split instantly afterwards.
+        props.measured_sun_per_unit = sun_per_unit
+        props.measured_sky_per_unit = sky_per_unit
+        props.measured_needed = needed
         share = float(np.clip(props.sun_share, 0.0, 1.0))
         if sun_per_unit <= 1e-9:
             share = 0.0                       # no usable sun; put it all in the sky

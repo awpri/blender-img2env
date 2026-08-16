@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Photo3D — photo to solved scene",
     "author": "Alexander",
-    "version": (0, 6, 0),
+    "version": (0, 7, 0),
     "blender": (4, 2, 0),
     "location": "View3D > N-panel > Photo3D",
     "description": "Solve camera, proxy geometry and image-derived lighting from a single photo.",
