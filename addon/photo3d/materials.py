@@ -91,20 +91,31 @@ def build_material(kind: str, plate_image=None):
 def configure_visibility(obj, kind: str):
     """Ray visibility for a re-shaded region.
 
-    Transmissive regions have to be visible to the camera, or a CG object
-    behind them is seen directly rather than through them — which is the whole
-    reason for marking the glass in the first place. They also stop being
-    shadow catchers, because a shadow catcher is a matte and a matte cannot
-    refract.
+    Every region stays a camera-invisible shadow catcher, including the glass.
+    That is deliberate and it is the opposite of the obvious choice.
+
+    The real glass is ALREADY IN THE PHOTOGRAPH. Making the region visible to
+    camera rays renders a second sheet of glass on top of the first, refracting
+    a scene that is itself mostly the plate projected onto matte geometry — so
+    the frame fills with smeared reflections of the station, which is exactly
+    what it did.
+
+    What marking it as glass still buys you is every OTHER ray: a CG object
+    beside it gets a real specular reflection off it, and light transmits
+    through it rather than being blocked.
+
+    The cost, stated plainly: a CG object placed BEHIND the glass is seen
+    directly rather than refracted through it, because the camera never hits
+    the glass. Single-photograph compositing cannot have both — the plate
+    already fixed what that surface looks like from this viewpoint.
     """
-    transmissive = kind in {"GLASS", "WATER"}
-    obj.is_shadow_catcher = not transmissive
-    obj.visible_camera = True
+    obj.is_shadow_catcher = True
+    obj.visible_camera = True          # the shadow catcher makes it a matte
     obj.visible_diffuse = True
     obj.visible_glossy = True
     obj.visible_transmission = True
     obj.visible_shadow = True
-    obj.display_type = "TEXTURED" if transmissive else "WIRE"
+    obj.display_type = "WIRE"
 
 
 class PHOTO3D_OT_split_material_region(bpy.types.Operator):
@@ -149,8 +160,9 @@ class PHOTO3D_OT_split_material_region(bpy.types.Operator):
         context.view_layer.objects.active = region
         self.report({"INFO"},
                     f"{region.name}: {len(region.data.polygons)} faces. "
-                    + ("It is camera-visible and refracts, so CG behind it is seen "
-                       "through it" if self.kind in {"GLASS", "WATER"} else
+                    + ("CG beside it now gets a real reflection off it; the camera "
+                       "still sees the photograph, because the glass is already in it"
+                       if self.kind in {"GLASS", "WATER"} else
                        "It still catches shadows like the rest of the proxy"))
         return {"FINISHED"}
 

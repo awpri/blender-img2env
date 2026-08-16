@@ -262,6 +262,11 @@ def measure_ground_irradiance(context) -> float:
         "look": scene.view_settings.look,
         "exposure": scene.view_settings.exposure,
         "gamma": scene.view_settings.gamma,
+        # Leaking these left every later render writing EXR — including the
+        # gobo bake, which then could not find the PNG it went looking for.
+        "file_format": scene.render.image_settings.file_format,
+        "color_depth": scene.render.image_settings.color_depth,
+        "color_mode": scene.render.image_settings.color_mode,
     }
     has_group = hasattr(scene, "compositing_node_group")
     saved["compositor"] = scene.compositing_node_group if has_group else scene.use_nodes
@@ -336,6 +341,9 @@ def measure_ground_irradiance(context) -> float:
         scene.view_settings.look = saved["look"]
         scene.view_settings.exposure = saved["exposure"]
         scene.view_settings.gamma = saved["gamma"]
+        scene.render.image_settings.file_format = saved["file_format"]
+        scene.render.image_settings.color_depth = saved["color_depth"]
+        scene.render.image_settings.color_mode = saved["color_mode"]
         if has_group:
             scene.compositing_node_group = saved["compositor"]
         else:
@@ -494,6 +502,8 @@ def _render_settings(scene, proxy_obj, temp_material, gobo_resolution):
         "compositor": scene.compositing_node_group if has_node_group else scene.use_nodes,
         "samples": scene.cycles.samples,
         "view_transform": scene.view_settings.view_transform,
+        "file_format": scene.render.image_settings.file_format,
+        "color_mode": scene.render.image_settings.color_mode,
     }
     saved_materials = [slot.material for slot in proxy_obj.material_slots]
     saved_flags = (proxy_obj.is_shadow_catcher, proxy_obj.visible_camera,
@@ -514,6 +524,10 @@ def _render_settings(scene, proxy_obj, temp_material, gobo_resolution):
         scene.cycles.samples = 8
         # The mask is data, not a picture. A view transform would grade it.
         scene.view_settings.view_transform = "Standard"
+        # Set the format explicitly: whatever it happened to be decides the
+        # extension Blender appends, and the loader below expects a PNG.
+        scene.render.image_settings.file_format = "PNG"
+        scene.render.image_settings.color_mode = "RGB"
         yield
     finally:
         scene.camera = saved["camera"]
@@ -528,6 +542,8 @@ def _render_settings(scene, proxy_obj, temp_material, gobo_resolution):
             scene.use_nodes = saved["compositor"]
         scene.cycles.samples = saved["samples"]
         scene.view_settings.view_transform = saved["view_transform"]
+        scene.render.image_settings.file_format = saved["file_format"]
+        scene.render.image_settings.color_mode = saved["color_mode"]
         for slot, material in zip(proxy_obj.material_slots, saved_materials):
             slot.material = material
         (proxy_obj.is_shadow_catcher, proxy_obj.visible_camera,
@@ -625,6 +641,11 @@ class PHOTO3D_OT_bake_gobo(bpy.types.Operator):
             bpy.data.objects.remove(gobo_camera, do_unlink=True)
             bpy.data.materials.remove(temp_material)
 
+        if not os.path.exists(out_path):
+            self.report({"ERROR"},
+                        f"the gobo render produced no file at {out_path}. Check the "
+                        "output format in Render Properties is an image format")
+            return {"CANCELLED"}
         gobo_image = bpy.data.images.load(out_path, check_existing=False)
         gobo_image.colorspace_settings.name = "Non-Color"
         self._build_gobo_plane(context, sun_direction, centre, gobo_image, props)
