@@ -237,6 +237,51 @@ def _set_scale_to_render_size(scale_node) -> bool:
     return False
 
 
+def _multiply_by_shadow_catcher(tree, plate_scale_node, layers_node):
+    """plate x Shadow Catcher, returning the socket to use as the background.
+
+    Falls back to the unmodified plate if the pass is unavailable, so a scene
+    without it still composites — just without shadows, which is what it had
+    before anyway.
+    """
+    if "Shadow Catcher" not in layers_node.outputs:
+        return plate_scale_node.outputs["Image"]
+
+    # Blender 5 removed BOTH compositor mix nodes in favour of the unified
+    # ShaderNodeMix, which the compositor tree also accepts. 4.x has MixRGB.
+    node = None
+    for identifier in ("ShaderNodeMix", "CompositorNodeMix", "CompositorNodeMixRGB"):
+        try:
+            node = tree.nodes.new(identifier)
+            break
+        except RuntimeError:
+            continue
+    if node is None:
+        return plate_scale_node.outputs["Image"]
+
+    node.location = (250, -200)
+    if hasattr(node, "blend_type"):
+        node.blend_type = "MULTIPLY"
+    if hasattr(node, "data_type"):
+        node.data_type = "RGBA"
+
+    # 4.x MixRGB uses Fac/Image/Image; 5.x Mix uses Factor/A/B, and the RGBA
+    # variant hides duplicate-named sockets, so pick by enabled colour inputs.
+    colour_inputs = [s for s in node.inputs
+                     if s.enabled and s.type in {"RGBA", "VECTOR"}]
+    factor = next((s for s in node.inputs if s.name in {"Fac", "Factor"}), None)
+    if factor is not None:
+        factor.default_value = 1.0
+    if len(colour_inputs) < 2:
+        tree.nodes.remove(node)
+        return plate_scale_node.outputs["Image"]
+
+    tree.links.new(plate_scale_node.outputs["Image"], colour_inputs[0])
+    tree.links.new(layers_node.outputs["Shadow Catcher"], colour_inputs[1])
+    output = next((s for s in node.outputs if s.enabled), node.outputs[0])
+    return output
+
+
 def setup_render(scene, plate_image, props):
     scene.render.engine = "CYCLES"
     try:
@@ -247,6 +292,11 @@ def setup_render(scene, plate_image, props):
     scene.cycles.use_adaptive_sampling = True
     scene.cycles.samples = 512               # 512+ is also the fix for Minecraft
     scene.cycles.use_denoising = True        # texture shimmer at distance
+    # Without this pass the compositor has no shadow to multiply in, and every
+    # CG shadow silently vanishes between the viewport and the render.
+    for view_layer in scene.view_layers:
+        if hasattr(view_layer, "cycles"):
+            view_layer.cycles.use_pass_shadow_catcher = True
     scene.view_settings.view_transform = props.view_transform
 
     tree, output, output_socket = _compositor_tree(scene)
@@ -260,8 +310,16 @@ def setup_render(scene, plate_image, props):
     _set_scale_to_render_size(scale)
     tree.links.new(plate.outputs["Image"], scale.inputs["Image"])
 
+    # THE SHADOW PATH. Cycles does not hand back a shadow-catcher shadow as
+    # dark premultiplied pixels — it hands back a separate Shadow Catcher pass
+    # holding a MULTIPLIER, near 1 in light and below 1 in shadow, and leaves
+    # the alpha at zero there. So Alpha Over alone silently discards every
+    # shadow: it is present in the viewport, where no compositor runs, and gone
+    # the moment you render. The plate has to be multiplied by that pass before
+    # the CG goes over the top.
     background, foreground = _alpha_over_sockets(over)
-    tree.links.new(scale.outputs["Image"], background)
+    shadowed = _multiply_by_shadow_catcher(tree, scale, layers)
+    tree.links.new(shadowed, background)
     tree.links.new(layers.outputs["Image"], foreground)
     tree.links.new(over.outputs["Image"], output.inputs[output_socket])
 
@@ -520,6 +578,16 @@ class PHOTO3D_OT_diagnose(bpy.types.Operator):
             elif not any(s.links for s in outputs[0].inputs):
                 problems.append("nothing is connected to the compositor output")
 
+        view_layer = context.view_layer
+        if hasattr(view_layer, "cycles") and not view_layer.cycles.use_pass_shadow_catcher:
+            problems.append("the Shadow Catcher pass is OFF — Cycles returns shadows "
+                            "as a separate multiplier pass, so without it every CG "
+                            "shadow disappears between viewport and render. Re-solve")
+        if tree is not None and not any(
+                n.type in {"MIX_RGB", "MIX"} for n in tree.nodes):
+            problems.append("the compositor never multiplies the plate by the Shadow "
+                            "Catcher pass, so shadows will not appear. Re-solve")
+
         proxies = [o for o in scene.objects if o.is_shadow_catcher]
         if not proxies:
             problems.append("no shadow catcher in the scene — nothing can receive a "
@@ -533,9 +601,16 @@ class PHOTO3D_OT_diagnose(bpy.types.Operator):
         else:
             notes.append(f"sun {sun.data.energy:.2f}, sky {context.scene.photo3d.sky_strength:.4f}")
 
+        # Only the pipeline's own infrastructure is excluded. The drop-test
+        # cube is called Photo3D_DropTest and IS a caster; a name-prefix filter
+        # reported "no object casts a shadow" while one sat in the outliner.
+        infrastructure = {"Photo3D_Proxy", "Photo3D_Bounce", "Photo3D_Ground",
+                          "Photo3D_Gobo", "Photo3D_Cam", "Photo3D_Sun"}
         casters = [o for o in scene.objects if o.type == "MESH"
                    and not o.is_shadow_catcher and o.visible_shadow
-                   and not o.name.startswith("Photo3D_")]
+                   and o.name not in infrastructure
+                   and not o.name.startswith("Photo3D_Region")
+                   and not o.name.startswith("Photo3D_Seg")]
         if not casters:
             problems.append("no object that casts a shadow — add your model, and check "
                             "it is not itself marked as a shadow catcher")

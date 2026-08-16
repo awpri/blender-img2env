@@ -264,7 +264,21 @@ def main() -> int:
         # The plate reaches the background through a Scale node. Without it an
         # 8064 px plate is pasted 1:1 into a half-size render and you get a
         # centre crop, which looks like the CG having vanished.
-        scale = background.links[0].from_node
+        # The plate reaches the background through a multiply by the Shadow
+        # Catcher pass, then a Scale. Cycles returns shadow-catcher shadows as
+        # that pass — a multiplier, with alpha left at zero — so an Alpha Over
+        # on its own silently discards every shadow: visible in the viewport,
+        # where no compositor runs, and gone the instant you render.
+        mix = background.links[0].from_node
+        assert mix.type in {"MIX", "MIX_RGB"}, \
+            f"plate must be multiplied by the Shadow Catcher pass, not {mix.type}"
+        assert any(s.links and s.links[0].from_socket.name == "Shadow Catcher"
+                   for s in mix.inputs), "the multiply is not fed by the Shadow Catcher pass"
+        assert scene.view_layers[0].cycles.use_pass_shadow_catcher, \
+            "the Shadow Catcher pass is off, so the multiply has nothing to use"
+
+        scale = next(s.links[0].from_node for s in mix.inputs
+                     if s.links and s.links[0].from_node.type == "SCALE")
         assert scale.type == "SCALE", f"plate must be scaled, not {scale.type}"
         assert scale.inputs["Image"].links[0].from_node.type == "IMAGE"
         mode = (getattr(scale, "space", None)
