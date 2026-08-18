@@ -33,3 +33,6 @@ venv/
 
 # render check output
 .render_checks/
+
+# Photographs live here for testing; never commit them (they are huge)
+testphotos/

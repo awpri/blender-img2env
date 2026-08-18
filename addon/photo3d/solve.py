@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from math import degrees, radians
 
+import numpy as np
+
 import bpy
 from mathutils import Matrix, Vector
 
@@ -629,8 +631,97 @@ class PHOTO3D_OT_diagnose(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class PHOTO3D_OT_measure_shadow(bpy.types.Operator):
+    """Render twice and count how many pixels your objects actually darken"""
+    bl_idname = "photo3d.measure_shadow"
+    bl_label = "Measure Shadow"
+
+    def execute(self, context):
+        """Answer "is there a shadow" with a number instead of an opinion.
+
+        Inspecting the node graph cannot tell you this — the graph was correct
+        through several rounds in which no shadow reached the picture. So this
+        renders the scene twice at a tiny resolution, once with the casters
+        hidden, and counts the pixels that got darker. Pixels that got BRIGHTER
+        are the objects themselves and are reported separately, because seeing
+        only those is the signature of an object that lights but does not cast.
+        """
+        import os
+
+        scene = context.scene
+        casters = [o for o in scene.objects
+                   if o.type == "MESH" and not o.is_shadow_catcher
+                   and o.visible_camera and not o.hide_render
+                   and not o.name.startswith("Photo3D_")]
+        if not casters:
+            self.report({"ERROR"}, "no CG object to cast a shadow — add your model")
+            return {"CANCELLED"}
+
+        saved = {
+            "percentage": scene.render.resolution_percentage,
+            "samples": scene.cycles.samples,
+            "filepath": scene.render.filepath,
+            "file_format": scene.render.image_settings.file_format,
+            "color_mode": scene.render.image_settings.color_mode,
+            "color_depth": scene.render.image_settings.color_depth,
+        }
+        hidden = {o: o.hide_render for o in casters}
+        path = os.path.join(bpy.app.tempdir, "photo3d_shadow")
+
+        def sample():
+            scene.render.filepath = path
+            bpy.ops.render.render(write_still=True)
+            image = bpy.data.images.load(path + ".exr", check_existing=False)
+            buffer = np.empty(image.size[0] * image.size[1] * 4, dtype=np.float32)
+            image.pixels.foreach_get(buffer)
+            bpy.data.images.remove(image)
+            return buffer.reshape(-1, 4)[:, :3].mean(axis=1)
+
+        try:
+            scene.render.resolution_percentage = 10
+            scene.cycles.samples = 48
+            scene.render.image_settings.file_format = "OPEN_EXR"
+            scene.render.image_settings.color_mode = "RGBA"
+            scene.render.image_settings.color_depth = "32"
+
+            with_objects = sample()
+            for obj in casters:
+                obj.hide_render = True
+            without = sample()
+        except Exception as exc:                                  # noqa: BLE001
+            self.report({"ERROR"}, f"measurement render failed: {exc}")
+            return {"CANCELLED"}
+        finally:
+            for obj, was in hidden.items():
+                obj.hide_render = was
+            scene.render.resolution_percentage = saved["percentage"]
+            scene.cycles.samples = saved["samples"]
+            scene.render.filepath = saved["filepath"]
+            scene.render.image_settings.file_format = saved["file_format"]
+            scene.render.image_settings.color_mode = saved["color_mode"]
+            scene.render.image_settings.color_depth = saved["color_depth"]
+
+        delta = without - with_objects            # positive where the CG darkened it
+        darker = int((delta > 0.01).sum())
+        brighter = int((delta < -0.01).sum())
+        total = int(delta.size)
+
+        self.report({"INFO"},
+                    f"{darker} of {total} pixels darkened ({darker / total:.1%}), "
+                    f"{brighter} brightened. Mean darkening "
+                    f"{float(delta[delta > 0.01].mean()) if darker else 0.0:.3f}")
+        if darker == 0:
+            self.report({"ERROR"},
+                        "NO SHADOW REACHES THE PICTURE. The objects light the scene "
+                        "but darken nothing. Check: a shadow catcher exists under "
+                        "them, Direct sun share is not near 0, and the sun is not "
+                        "behind them from this camera — try Sun azimuth offset")
+        return {"FINISHED"}
+
+
 CLASSES = (PHOTO3D_OT_check_server, PHOTO3D_OT_solve, PHOTO3D_OT_solve_metadata_only,
-           PHOTO3D_OT_align_view, PHOTO3D_OT_reset_camera, PHOTO3D_OT_diagnose)
+           PHOTO3D_OT_align_view, PHOTO3D_OT_reset_camera, PHOTO3D_OT_diagnose,
+           PHOTO3D_OT_measure_shadow)
 
 
 def register():

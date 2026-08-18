@@ -3,56 +3,49 @@
 Where the work stopped, and what to check first. Written at v0.9.0 so the next
 session does not have to re-derive any of it.
 
-The headline: **CG objects still cast no visible shadow onto the plate**, and
-several rounds of fixes have not resolved it. Each of those fixes was a real
-bug — they are listed at the bottom — but none was the one that matters.
+The headline: the user reports **CG objects cast no visible shadow onto the
+plate**, while the same pipeline measurably does cast one here. Several rounds
+of fixes have not closed that gap. Each fix was a real bug — they are listed at
+the bottom — but none was the one that matters to them.
 
 ---
 
-## 1. The verification is not checking what ships. Resolve this first.
+## 1. RESOLVED — this was my error, not a defect
 
-`tools/blender_smoke_test.py` contains:
+The previous version of this file claimed `make_proxy_material` was silently
+dropping three nodes and that the smoke test was therefore lying. **Both claims
+were wrong.**
 
-```python
-nodes = {n.type for n in material.node_tree.nodes}
-assert {"MIX_SHADER", "BSDF_TRANSPARENT", "LIGHT_PATH", "TEX_IMAGE"} <= nodes
-```
+The four-node material is deliberate. Commit `ddb5128` removed the
+Is-Camera-Ray/Transparent branch on purpose, because it cancels the shadow
+catcher: a camera ray that passes straight through never hits the catcher, so
+Cycles has no surface on which to compute the shadow ratio. Measured there,
+same scene, only the material differing:
 
-It passes. But calling `proxy.make_proxy_material()` directly in the same
-Blender produces only four nodes:
+    Is Camera Ray -> Transparent :   0 shadow pixels
+    plain Principled             : 283 shadow pixels, mean alpha 0.82
 
-```
-DIRECT call -> ['BSDF_PRINCIPLED', 'OUTPUT_MATERIAL', 'TEX_COORD', 'TEX_IMAGE']
-  output fed by: BSDF_PRINCIPLED
-```
+The smoke test was updated in the same commit and no longer asserts those
+nodes. There was never a contradiction — I compared the current code against a
+stale memory of it.
 
-and a real solve leaves `Photo3D_ProxyMat` with those same four. The Mix
-Shader, Transparent BSDF and Light Path are absent, and the Principled feeds
-the output directly.
+## 1b. So does it work? On this machine, yes — measured.
 
-Both cannot be true of the same code. Until that contradiction is explained,
-**no "all Blender checks passed" result from this suite means anything about
-the proxy shader**, and several such results were reported during development.
+A full solve of `IMG_9920.DNG` with a cube in front of the camera, rendered
+twice with the caster shown and hidden:
 
-Likely candidates, in order:
+    14,637 of 486,824 pixels darkened by the cube (3.0%)
+    mean darkening 0.156
 
-- `nodes.new()` silently failing for those three identifiers on Blender 5.2,
-  with the smoke test inspecting a material built at a different moment.
-- The smoke test reading a *different* material than the one the solve ships
-  (a leftover from an earlier build step in the same session).
+So the committed pipeline does put a shadow on the plate for that exact photo.
+Which means the remaining failure is something about the scene in front of the
+user, not the code path — and guessing at it from here has repeatedly failed.
 
-Reproduce with `tools/` scratch scripts or:
+`Measure Shadow` (next to Diagnose in the panel) now does the same measurement
+in whatever scene it is run in, and says explicitly when the number is zero.
+That turns "there are still no shadows" into a number both sides can read.
 
-```bash
-blender --background --factory-startup --python-expr "
-import sys; sys.path.insert(0,'addon')
-import bpy, photo3d; photo3d.register()
-from photo3d import proxy
-m = proxy.make_proxy_material(bpy.data.images.new('t',8,8))
-print(sorted(n.type for n in m.node_tree.nodes))"
-```
-
-## 2. Does the Shadow Catcher pass contain anything?
+## 2. Does the Shadow Catcher pass contain anything? (still worth knowing)
 
 v0.8.0 changed the compositor to multiply the plate by the Shadow Catcher
 pass, on the reasoning that Cycles returns shadow-catcher shadows as a
@@ -67,9 +60,9 @@ Measure it by wiring `R_LAYERS ▸ Shadow Catcher` straight to the compositor
 output, rendering to EXR, and reporting min/mean. A scratch script that does
 this got as far as failing on question 1 above.
 
-Note the interaction: **if the proxy is a plain Principled surface** (per
-question 1) that is *correct* for shadow catching, so the missing nodes are
-probably not the shadow bug. Do not conflate the two.
+Less urgent than it looked, now that the end-to-end measurement above shows a
+shadow does arrive. But it is still unmeasured, and if the pass were inert the
+shadow would have to be arriving by some other route than intended.
 
 ## 3. Smaller, genuinely open
 

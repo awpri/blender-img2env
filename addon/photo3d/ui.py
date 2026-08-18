@@ -81,7 +81,9 @@ class PHOTO3D_PT_main(Photo3DPanel, bpy.types.Panel):
         row = layout.row(align=True)
         row.operator("photo3d.align_view", icon="VIEW_CAMERA")
         row.operator("photo3d.reset_camera", text="", icon="LOOP_BACK")
-        layout.operator("photo3d.diagnose", icon="VIEWZOOM")
+        row = layout.row(align=True)
+        row.operator("photo3d.diagnose", icon="VIEWZOOM")
+        row.operator("photo3d.measure_shadow", icon="LIGHT_SUN")
 
 
 class PHOTO3D_PT_camera(Photo3DPanel, bpy.types.Panel):
