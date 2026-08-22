@@ -117,6 +117,32 @@ def _update_sun_share(self, context):
         self.sky_strength = self.measured_needed * (1.0 - share) / self.measured_sky_per_unit
 
 
+def _update_proxy_blocks_light(self, context):
+    """Whether the proxy mesh may block the sun.
+
+    Off by default, and the reason is the same one that made the >1 clamp
+    necessary: the photograph already contains every shadow the real scene
+    casts. When the proxy also blocks light it shadows ITSELF wherever the
+    depth mesh is jagged — every discontinuity becomes a false occluder — and
+    the compositor then darkens a plate that was already correctly dark there.
+    On a station canopy that shows up as smeared dark patches across the
+    ceiling and platform.
+
+    Turn it on when you want the real geometry to shade your CG — an object
+    walking under the canopy going into shadow — and accept the patches, or
+    raise Edge cull so fewer false occluders survive.
+    """
+    for name in ("Photo3D_Proxy", "Photo3D_Ground"):
+        obj = bpy.data.objects.get(name)
+        if obj is not None:
+            obj.visible_shadow = self.proxy_blocks_light
+    for obj in bpy.data.objects:
+        if obj.name.startswith("Photo3D_Seg") or obj.name.startswith("Photo3D_Region"):
+            # transmissive regions never block, whatever this is set to
+            if "Glass" not in obj.name and "Water" not in obj.name:
+                obj.visible_shadow = self.proxy_blocks_light
+
+
 def _bounce_nodes():
     bounce = bpy.data.objects.get("Photo3D_Bounce")
     if bounce is None or not bounce.material_slots:
@@ -198,6 +224,13 @@ class Photo3DProps(bpy.types.PropertyGroup):
                     "has a lot of scene out there. Nothing collides with a peak "
                     "4km away")
     collision_smooth: FloatProperty(name="Collider smoothing", default=0.3, min=0.0, max=1.0)
+    proxy_blocks_light: BoolProperty(
+        name="Proxy blocks light", default=False,
+        update=_update_proxy_blocks_light,
+        description="Let the depth mesh cast shadows. Off by default: the photo "
+                    "already contains every real shadow, and a jagged depth mesh "
+                    "shadows itself at every discontinuity, smearing dark patches "
+                    "over the plate. Turn on to have real geometry shade your CG")
     ground_plane_size: FloatProperty(
         name="Ground plane size (m)", default=200.0, min=1.0,
         description="A level plane at z=0. Its orientation comes from measured "

@@ -109,12 +109,16 @@ def configure_visibility(obj, kind: str):
     the glass. Single-photograph compositing cannot have both — the plate
     already fixed what that surface looks like from this viewpoint.
     """
+    transmissive = kind in {"GLASS", "WATER"}
     obj.is_shadow_catcher = True
     obj.visible_camera = True          # the shadow catcher makes it a matte
     obj.visible_diffuse = True
     obj.visible_glossy = True
     obj.visible_transmission = True
-    obj.visible_shadow = True
+    # Glass does not block the sun, so it must not cast a shadow. Left on, a
+    # window or shelter throws a hard silhouette across the platform that is
+    # not in the photograph and never was.
+    obj.visible_shadow = not transmissive
     obj.display_type = "WIRE"
 
 

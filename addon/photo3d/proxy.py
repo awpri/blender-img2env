@@ -133,7 +133,9 @@ def make_shadow_catcher(obj, props):
     obj.visible_diffuse = True
     obj.visible_glossy = True
     obj.visible_transmission = True
-    obj.visible_shadow = True
+    # See props._update_proxy_blocks_light: off by default, because the plate
+    # already contains the scene's own shadows and a jagged mesh self-shadows.
+    obj.visible_shadow = props.proxy_blocks_light
     obj.display_type = "WIRE"
 
     if props.collision_smooth > 0.0:

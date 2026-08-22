@@ -123,6 +123,7 @@ class PHOTO3D_PT_proxy(Photo3DPanel, bpy.types.Panel):
         column.prop(props, "edge_threshold")
         column.prop(props, "max_depth")
         column.prop(props, "collision_smooth")
+        column.prop(props, "proxy_blocks_light")
 
         box = self.layout.box()
         # Only shout about the scale on the lens where it measured wrong: 14mm

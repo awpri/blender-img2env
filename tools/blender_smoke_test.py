@@ -272,8 +272,29 @@ def main() -> int:
         mix = background.links[0].from_node
         assert mix.type in {"MIX", "MIX_RGB"}, \
             f"plate must be multiplied by the Shadow Catcher pass, not {mix.type}"
-        assert any(s.links and s.links[0].from_socket.name == "Shadow Catcher"
-                   for s in mix.inputs), "the multiply is not fed by the Shadow Catcher pass"
+        # The pass reaches the multiply through a DARKEN clamp: it may darken
+        # the plate and may not brighten it, because the photograph already
+        # contains all the real light and the pass exceeds 1.0 wherever the
+        # bounce proxy adds some (measured up to 1.476).
+        def feeds_from(socket, name, depth=3):
+            if not socket.links:
+                return False
+            source = socket.links[0]
+            if source.from_socket.name == name:
+                return True
+            return depth > 0 and any(feeds_from(s, name, depth - 1)
+                                     for s in source.from_node.inputs)
+
+        assert any(feeds_from(s, "Shadow Catcher") for s in mix.inputs), \
+            "the multiply is not fed by the Shadow Catcher pass"
+        # Compare by name, not identity: bpy hands back a fresh Python wrapper
+        # on each access, so `is not` between two references to the same node
+        # can be True and quietly select the wrong one.
+        clamp = next((n for n in tree.nodes
+                      if n.type in {"MIX", "MIX_RGB"} and n.name != mix.name), None)
+        assert clamp is not None and getattr(clamp, "blend_type", "") == "DARKEN", \
+            "the Shadow Catcher pass is not clamped at 1.0, so bounce light will "\
+            "brighten the plate it is already present in"
         assert scene.view_layers[0].cycles.use_pass_shadow_catcher, \
             "the Shadow Catcher pass is off, so the multiply has nothing to use"
 
@@ -296,7 +317,12 @@ def main() -> int:
         assert bounce.rigid_body is None, "the emissive twin must not collide"
         assert not shadow.visible_diffuse and not shadow.visible_glossy, \
             "the shadow proxy must stop contributing indirect light"
-        assert shadow.visible_shadow and shadow.is_shadow_catcher
+        assert shadow.is_shadow_catcher
+        # visible_shadow is off by default now: a jagged depth mesh shadows
+        # itself at every discontinuity and the compositor then darkens a plate
+        # that was already correctly dark there. props.proxy_blocks_light turns
+        # it back on for people who want real geometry to shade their CG.
+        assert shadow.visible_shadow == bpy.context.scene.photo3d.proxy_blocks_light
 
         emission = next(n for n in bounce.material_slots[0].material.node_tree.nodes
                         if n.type == "EMISSION")

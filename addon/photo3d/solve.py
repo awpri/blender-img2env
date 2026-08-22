@@ -239,6 +239,52 @@ def _set_scale_to_render_size(scale_node) -> bool:
     return False
 
 
+def _clamp_shadow_catcher(tree, layers_node):
+    """Shadow Catcher, limited to at most 1.0. Returns the socket to multiply by.
+
+    The pass is a multiplier around 1.0, but it is not bounded there: measured
+    on a solved scene with the bounce proxy running, it reaches 1.476, because
+    the catcher genuinely receives that extra bounced light.
+
+    Multiplying the plate by anything above 1 double-counts. The photograph
+    ALREADY contains every bit of real illumination in it — the bounce proxy
+    exists to light CG objects, not to re-light the photograph. Left unclamped
+    it drives the plate up by nearly half a stop wherever bounce lands, which
+    reads as a blown, over-saturated, doubled-looking image rather than as a
+    lighting error.
+
+    So the pass may darken the plate and may not brighten it. DARKEN against
+    white is min(pass, 1) and needs no scalar/colour conversion.
+    """
+    node = None
+    for identifier in ("ShaderNodeMix", "CompositorNodeMix", "CompositorNodeMixRGB"):
+        try:
+            node = tree.nodes.new(identifier)
+            break
+        except RuntimeError:
+            continue
+    if node is None:
+        return layers_node.outputs["Shadow Catcher"]
+
+    node.location = (250, -380)
+    if hasattr(node, "data_type"):
+        node.data_type = "RGBA"
+    if hasattr(node, "blend_type"):
+        node.blend_type = "DARKEN"
+
+    colour_inputs = [s for s in node.inputs if s.enabled and s.type in {"RGBA", "VECTOR"}]
+    factor = next((s for s in node.inputs if s.name in {"Fac", "Factor"}), None)
+    if factor is not None:
+        factor.default_value = 1.0
+    if len(colour_inputs) < 2:
+        tree.nodes.remove(node)
+        return layers_node.outputs["Shadow Catcher"]
+
+    tree.links.new(layers_node.outputs["Shadow Catcher"], colour_inputs[0])
+    colour_inputs[1].default_value = (1.0, 1.0, 1.0, 1.0)
+    return next((s for s in node.outputs if s.enabled), node.outputs[0])
+
+
 def _multiply_by_shadow_catcher(tree, plate_scale_node, layers_node):
     """plate x Shadow Catcher, returning the socket to use as the background.
 
@@ -262,10 +308,12 @@ def _multiply_by_shadow_catcher(tree, plate_scale_node, layers_node):
         return plate_scale_node.outputs["Image"]
 
     node.location = (250, -200)
-    if hasattr(node, "blend_type"):
-        node.blend_type = "MULTIPLY"
+    # data_type FIRST: switching it resets blend_type back to the default, so
+    # setting the mode before the type leaves a plain blend behind.
     if hasattr(node, "data_type"):
         node.data_type = "RGBA"
+    if hasattr(node, "blend_type"):
+        node.blend_type = "MULTIPLY"
 
     # 4.x MixRGB uses Fac/Image/Image; 5.x Mix uses Factor/A/B, and the RGBA
     # variant hides duplicate-named sockets, so pick by enabled colour inputs.
@@ -279,7 +327,8 @@ def _multiply_by_shadow_catcher(tree, plate_scale_node, layers_node):
         return plate_scale_node.outputs["Image"]
 
     tree.links.new(plate_scale_node.outputs["Image"], colour_inputs[0])
-    tree.links.new(layers_node.outputs["Shadow Catcher"], colour_inputs[1])
+    clamped = _clamp_shadow_catcher(tree, layers_node)
+    tree.links.new(clamped, colour_inputs[1])
     output = next((s for s in node.outputs if s.enabled), node.outputs[0])
     return output
 
