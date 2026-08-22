@@ -240,49 +240,49 @@ def _set_scale_to_render_size(scale_node) -> bool:
 
 
 def _clamp_shadow_catcher(tree, layers_node):
-    """Shadow Catcher, limited to at most 1.0. Returns the socket to multiply by.
+    """Shadow Catcher reduced to a single occlusion number, capped at 1.
 
-    The pass is a multiplier around 1.0, but it is not bounded there: measured
-    on a solved scene with the bounce proxy running, it reaches 1.476, because
-    the catcher genuinely receives that extra bounced light.
+    Two things have to happen to that pass before it may touch the plate, and
+    the second is why the first was not enough.
 
-    Multiplying the plate by anything above 1 double-counts. The photograph
-    ALREADY contains every bit of real illumination in it — the bounce proxy
-    exists to light CG objects, not to re-light the photograph. Left unclamped
-    it drives the plate up by nearly half a stop wherever bounce lands, which
-    reads as a blown, over-saturated, doubled-looking image rather than as a
-    lighting error.
+    IT MUST NOT EXCEED 1. Measured on a solved scene with the bounce proxy
+    running it reaches 1.476, because the catcher really does receive that
+    bounced light. The photograph already contains every bit of real
+    illumination, so multiplying by anything above 1 double-counts and blows
+    the plate out.
 
-    So the pass may darken the plate and may not brighten it. DARKEN against
-    white is min(pass, 1) and needs no scalar/colour conversion.
+    IT MUST NOT CARRY COLOUR. The pass is RGB, and clamping it per channel is
+    what produced the blue and yellow striping: a pixel reading (1.2, 1.0, 0.8)
+    clamps to (1.0, 1.0, 0.8), which is no longer a neutral darkening but a
+    tint. Wherever the coloured bounce landed unevenly, the plate picked up a
+    colour cast in bands.
+
+    So the pass is collapsed to luminance first and capped as a scalar. What
+    reaches the multiply can only darken, and only neutrally. A real shadow is
+    slightly blue under an open sky, but that colour is already in the
+    photograph — this pass exists to say how MUCH light the CG took away, not
+    what colour the result should be.
     """
-    node = None
-    for identifier in ("ShaderNodeMix", "CompositorNodeMix", "CompositorNodeMixRGB"):
-        try:
-            node = tree.nodes.new(identifier)
-            break
-        except RuntimeError:
-            continue
-    if node is None:
-        return layers_node.outputs["Shadow Catcher"]
+    source = layers_node.outputs["Shadow Catcher"]
 
-    node.location = (250, -380)
-    if hasattr(node, "data_type"):
-        node.data_type = "RGBA"
-    if hasattr(node, "blend_type"):
-        node.blend_type = "DARKEN"
+    try:
+        grey = tree.nodes.new("CompositorNodeRGBToBW")
+    except RuntimeError:
+        return source
+    grey.location = (60, -420)
+    tree.links.new(source, grey.inputs["Image"])
 
-    colour_inputs = [s for s in node.inputs if s.enabled and s.type in {"RGBA", "VECTOR"}]
-    factor = next((s for s in node.inputs if s.name in {"Fac", "Factor"}), None)
-    if factor is not None:
-        factor.default_value = 1.0
-    if len(colour_inputs) < 2:
-        tree.nodes.remove(node)
-        return layers_node.outputs["Shadow Catcher"]
-
-    tree.links.new(layers_node.outputs["Shadow Catcher"], colour_inputs[0])
-    colour_inputs[1].default_value = (1.0, 1.0, 1.0, 1.0)
-    return next((s for s in node.outputs if s.enabled), node.outputs[0])
+    try:
+        cap = tree.nodes.new("ShaderNodeMath")
+    except RuntimeError:
+        return grey.outputs["Val"]
+    cap.location = (250, -420)
+    cap.operation = "MINIMUM"
+    tree.links.new(grey.outputs["Val"], cap.inputs[0])
+    scalars = [s for s in cap.inputs if s.enabled and s.type == "VALUE"]
+    if len(scalars) >= 2:
+        scalars[1].default_value = 1.0
+    return cap.outputs["Value"]
 
 
 def _multiply_by_shadow_catcher(tree, plate_scale_node, layers_node):

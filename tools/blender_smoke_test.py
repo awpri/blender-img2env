@@ -287,16 +287,23 @@ def main() -> int:
 
         assert any(feeds_from(s, "Shadow Catcher") for s in mix.inputs), \
             "the multiply is not fed by the Shadow Catcher pass"
-        # Compare by name, not identity: bpy hands back a fresh Python wrapper
-        # on each access, so `is not` between two references to the same node
-        # can be True and quietly select the wrong one.
-        clamp = next((n for n in tree.nodes
-                      if n.type in {"MIX", "MIX_RGB"} and n.name != mix.name), None)
-        assert clamp is not None and getattr(clamp, "blend_type", "") == "DARKEN", \
-            "the Shadow Catcher pass is not clamped at 1.0, so bounce light will "\
+        # The pass reaches the multiply as a SCALAR: RGB to BW, then capped at
+        # 1.0. Both steps matter. Uncapped it exceeds 1 wherever the bounce
+        # proxy lands (measured 1.476) and brightens a plate that already
+        # contains that light; clamped per channel instead of as a scalar it
+        # tints, which is what produced blue and yellow striping.
+        grey = next((n for n in tree.nodes if n.type == "RGBTOBW"), None)
+        assert grey is not None, "the Shadow Catcher pass is not collapsed to "\
+            "luminance, so clamping it will tint the plate"
+        assert grey.inputs["Image"].links[0].from_socket.name == "Shadow Catcher"
+
+        cap = next((n for n in tree.nodes if n.type == "MATH"), None)
+        assert cap is not None and cap.operation == "MINIMUM", \
+            "the Shadow Catcher pass is not capped at 1.0, so bounce light will "\
             "brighten the plate it is already present in"
-        assert scene.view_layers[0].cycles.use_pass_shadow_catcher, \
-            "the Shadow Catcher pass is off, so the multiply has nothing to use"
+        assert cap.inputs[0].links[0].from_node.type == "RGBTOBW"
+        assert any(feeds_from(s, "Value", 2) for s in mix.inputs), \
+            "the multiply is not fed by the capped Shadow Catcher"
 
         scale = next(s.links[0].from_node for s in mix.inputs
                      if s.links and s.links[0].from_node.type == "SCALE")

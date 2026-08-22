@@ -3,10 +3,13 @@
 Where the work stopped, and what to check first. Written at v0.9.0 so the next
 session does not have to re-derive any of it.
 
-The headline: the user reports **CG objects cast no visible shadow onto the
-plate**, while the same pipeline measurably does cast one here. Several rounds
-of fixes have not closed that gap. Each fix was a real bug — they are listed at
-the bottom — but none was the one that matters to them.
+**Largely closed at v0.12.0.** The composite now matches the photograph: no
+doubling, no saturation, no dark layer, no colour striping, measured hue shift
+against the plate of +0.003. What remains is listed under "Smaller" below.
+
+The long-running "no shadow" report turned out to be several separate bugs
+stacked, all of the same shape — adding light to, or taking light from, a
+photograph that already contained it. They are listed at the bottom.
 
 ---
 
@@ -45,7 +48,27 @@ user, not the code path — and guessing at it from here has repeatedly failed.
 in whatever scene it is run in, and says explicitly when the number is zero.
 That turns "there are still no shadows" into a number both sides can read.
 
-## 2. Does the Shadow Catcher pass contain anything? (still worth knowing)
+## 2. RESOLVED — measured, and it needed two corrections
+
+Measured on a solved scene with the bounce proxy running:
+
+    min 0.244   mean 1.002   max 1.476   91% of the frame exactly 1.0
+
+It is a genuine multiplier, but it is neither bounded at 1 nor neutral, and
+both mattered:
+
+* **Above 1** wherever the bounce proxy lands, because the catcher really does
+  receive that light. Multiplying the plate by it blew the photograph out.
+* **Coloured**, so clamping per channel turned (1.2, 1.0, 0.8) into
+  (1.0, 1.0, 0.8) — a tint, not a darkening. That was the blue and yellow
+  striping.
+
+It is now collapsed to luminance and capped as a scalar, so it can only darken
+and only neutrally. A real shadow is slightly blue under open sky, but that
+colour is already in the plate; this pass says how MUCH light the CG removed,
+not what colour to make the result.
+
+## 2b. Historical note (superseded)
 
 v0.8.0 changed the compositor to multiply the plate by the Shadow Catcher
 pass, on the reasoning that Cycles returns shadow-catcher shadows as a

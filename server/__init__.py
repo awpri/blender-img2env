@@ -8,4 +8,4 @@ Submodules are imported lazily by solver_server.py so that `import server.exif`
 in a test does not drag in torch.
 """
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
