@@ -270,6 +270,13 @@ class PHOTO3D_PT_materials(Photo3DPanel, bpy.types.Panel):
             for ident, label, _ in PRESETS:
                 grid.operator("photo3d.split_material_region",
                               text=label).kind = ident
+            box.separator()
+            box.operator("photo3d.light_from_selection", icon="LIGHT_AREA")
+            note = box.column(align=True)
+            note.scale_y = 0.8
+            note.label(text="A sunlit window is clipped to white")
+            note.label(text="in the plate, so its real power is")
+            note.label(text="not in the file. Make it a light.")
         else:
             layout.label(text="(enter Edit Mode to mark a region)", icon="INFO")
 

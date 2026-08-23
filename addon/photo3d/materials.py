@@ -21,6 +21,7 @@ import numpy as np
 
 import bpy
 from bpy.props import EnumProperty
+from mathutils import Vector
 
 #: (id, label, tooltip). The presets are starting points, not answers; every
 #: one of them is a surface you will want to tune once you see it rendered.
@@ -333,8 +334,133 @@ class PHOTO3D_OT_segment_proxy(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _selected_faces(obj):
+    """Indices of selected polygons, read outside edit mode.
+
+    Edit-mode selection lives in the BMesh and is only flushed back to the
+    Mesh on leaving edit mode, so anything reading polygon.select has to step
+    out first or it sees the state from the last time you did.
+    """
+    was_edit = obj.mode == "EDIT"
+    if was_edit:
+        bpy.ops.object.mode_set(mode="OBJECT")
+    selected = [i for i, poly in enumerate(obj.data.polygons) if poly.select]
+    if was_edit:
+        bpy.ops.object.mode_set(mode="EDIT")
+    return selected
+
+
+class PHOTO3D_OT_light_from_selection(bpy.types.Operator):
+    """Turn the selected faces into an area light of that size and colour"""
+    bl_idname = "photo3d.light_from_selection"
+    bl_label = "Make Light From Selection"
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return (obj is not None and obj.type == "MESH"
+                and obj.name.startswith("Photo3D_"))
+
+    def execute(self, context):
+        """Build a light where a bright surface is in the photograph.
+
+        The bounce proxy already turns the whole plate into an emitter, but it
+        emits what the plate SAYS, and a display-referred plate clips a sunlit
+        window to white — so the one surface most worth emitting is the one
+        whose real brightness the photograph could not record. Marking it by
+        hand and giving it a real wattage is not a workaround for that, it is
+        the only way to put back a value the file never held.
+
+        Position, orientation and size come from the faces. Colour comes from
+        the plate, normalised so the hue survives but the (clipped) magnitude
+        does not dictate the power — that is yours to set.
+        """
+        from . import radiance
+
+        obj = context.active_object
+        faces = _selected_faces(obj)
+        if not faces:
+            self.report({"ERROR"}, "select the faces covering the window or lamp first")
+            return {"CANCELLED"}
+
+        mesh = obj.data
+        centres, normals, corners = [], [], []
+        for index in faces:
+            poly = mesh.polygons[index]
+            centres.append(obj.matrix_world @ poly.center)
+            normals.append((obj.matrix_world.to_quaternion() @ poly.normal).normalized())
+            corners.extend(obj.matrix_world @ mesh.vertices[v].co for v in poly.vertices)
+
+        centre = sum(centres, Vector()) / len(centres)
+        normal = sum(normals, Vector()) / len(normals)
+        if normal.length < 1e-6:
+            normal = Vector((0.0, 0.0, -1.0))
+        normal.normalize()
+
+        # Size the light by the spread of its corners in the plane it lies in.
+        right = normal.cross(Vector((0.0, 0.0, 1.0)))
+        if right.length < 1e-4:
+            right = Vector((1.0, 0.0, 0.0))
+        right.normalize()
+        up = normal.cross(right).normalized()
+        offsets = [c - centre for c in corners]
+        width = max((abs(o.dot(right)) for o in offsets), default=0.5) * 2.0
+        height = max((abs(o.dot(up)) for o in offsets), default=0.5) * 2.0
+
+        colour = (1.0, 1.0, 1.0)
+        plate = radiance.find_plate(obj) or radiance.find_plate(
+            bpy.data.objects.get("Photo3D_Proxy"))
+        if plate is not None:
+            pixels = radiance.image_to_array(plate, 256)
+            scene = context.scene
+            long_edge = max(scene.render.resolution_x, scene.render.resolution_y)
+            camera = bpy.data.objects.get("Photo3D_Cam")
+            f_px = (camera.data.lens / camera.data.sensor_width * long_edge) if camera else long_edge
+            local = obj.matrix_world.inverted() @ centre
+            forward = -local.z
+            if forward > 1e-6:
+                u = (scene.render.resolution_x / 2.0 + f_px * local.x / forward) / scene.render.resolution_x
+                v = (scene.render.resolution_y / 2.0 - f_px * local.y / forward) / scene.render.resolution_y
+                row = int(np.clip(v * pixels.shape[0], 0, pixels.shape[0] - 1))
+                col = int(np.clip(u * pixels.shape[1], 0, pixels.shape[1] - 1))
+                sample = pixels[max(0, row - 2):row + 3, max(0, col - 2):col + 3]
+                if sample.size:
+                    mean = sample.reshape(-1, 3).mean(axis=0)
+                    peak = float(mean.max())
+                    # Normalise: keep the hue, drop the magnitude. A clipped
+                    # window reads as flat white, and its power is the one thing
+                    # the photograph genuinely cannot tell us.
+                    if peak > 1e-4:
+                        colour = tuple(float(c / peak) for c in mean)
+
+        existing = sum(1 for o in bpy.data.objects if o.name.startswith("Photo3D_Light"))
+        data = bpy.data.lights.new(f"Photo3D_Light_{existing:02d}", type="AREA")
+        data.shape = "RECTANGLE"
+        data.size = max(0.05, width)
+        data.size_y = max(0.05, height)
+        data.color = colour
+        # Radiance x area x pi is the honest starting point for a Lambertian
+        # emitter, assuming the surface was about as bright as diffuse white.
+        data.energy = max(1.0, width * height * np.pi * 30.0)
+
+        light = bpy.data.objects.new(data.name, data)
+        context.scene.collection.objects.link(light)
+        light.location = centre + normal * 0.02      # just off the surface
+        light.rotation_mode = "QUATERNION"
+        # An area light emits along its local -Z.
+        light.rotation_quaternion = Vector((0.0, 0.0, -1.0)).rotation_difference(normal)
+
+        self.report({"INFO"},
+                    f"{data.name}: {width:.2f} x {height:.2f} m, colour "
+                    f"({colour[0]:.2f}, {colour[1]:.2f}, {colour[2]:.2f}), "
+                    f"{data.energy:.0f} W. Aim and set the power by eye — the plate "
+                    "clipped this surface, so its real brightness is not in the file")
+        return {"FINISHED"}
+
+
 CLASSES = (PHOTO3D_OT_split_material_region, PHOTO3D_OT_select_proxy_for_editing,
-           PHOTO3D_OT_segment_proxy)
+           PHOTO3D_OT_segment_proxy, PHOTO3D_OT_light_from_selection)
 
 
 def register():

@@ -223,3 +223,50 @@ use the panorama only for distance.
 8. Panorama, only if you need distant reflections.
 
 Steps 5 and 6 are the ones that matter. 7 and 8 are polish.
+
+
+---
+
+## Selecting an irregular region
+
+Box-dragging rectangles is the wrong tool for a window that is not a rectangle
+on screen. Blender has three select tools and the toolbar is the unambiguous
+way in: the icons down the top-left of the viewport, click-and-hold the first
+one to swap between **Select Box**, **Select Circle** and **Select Lasso**.
+**W** cycles them.
+
+For painting over an awkward shape, **Select Circle** is usually fastest: press
+**C**, drag over the faces like a brush, scroll to resize the brush, middle-drag
+to erase, right-click or Esc to finish.
+
+Also worth knowing in face mode:
+
+| | |
+|---|---|
+| **C** then drag | circle select, brush-style |
+| **Ctrl + right-drag** | freehand lasso |
+| **B** | box select |
+| **Ctrl + numpad +** | grow the selection by one ring |
+| **Shift + click** | add or remove one face |
+
+**L** (select linked) is not much use on the proxy: the depth mesh is one
+connected grid, so it takes nearly everything.
+
+---
+
+## Turning a window into a light
+
+A sunlit window or a bright canopy panel is **clipped to white in the plate**.
+Its real brightness is the one thing the photograph could not record, so the
+bounce proxy cannot emit it correctly no matter how it is calibrated — it emits
+what the file says, and the file says "white".
+
+So mark it and give it a real wattage. Select the faces covering the window,
+then *Surface Materials ▸ Make Light From Selection*. It creates an area light
+at that surface, the size of the region, oriented along its normal, tinted with
+the colour sampled from the plate — the warm yellow of light through a canopy
+panel comes out as roughly (1.00, 0.88, 0.74).
+
+The power is a starting point, not a measurement, and it is deliberately yours
+to set: a clipped highlight carries no magnitude. Raise it until CG objects
+sitting in that patch of light look like they belong in it.
