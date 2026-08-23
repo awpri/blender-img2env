@@ -116,6 +116,15 @@ light is being counted twice. The toggle is symmetric on purpose, handing
 indirect duties back to the shadow proxy when the bounce is off, so the two
 renders are genuinely comparable.
 
+The other half of that check is the **photograph**, which should not move at
+all between the two renders. If building the bounce proxy visibly darkens the
+plate under a canopy, or puts bright fringes around glass, the bounce is being
+counted as a CG object in the shadow-catcher pass and the compositor is
+applying its effect to a photograph that already recorded it. It is marked a
+shadow catcher to prevent exactly that; `tools/render_checks.py` measures both
+halves, because a bounce proxy that leaves the plate alone by not reaching CG
+at all is not a fix.
+
 ---
 
 ## 5b. Match the exposure — do this or everything looks blown out

@@ -116,3 +116,39 @@ All real, none of them the shadow bug:
 | Sun/sky split uncalibrated | sky 4x the sun, so light came from everywhere and cast nothing |
 | Exposure probe leaked `file_format` | every later render silently wrote EXR; gobo bake crashed |
 | Glass regions made camera-visible | rendered a second sheet over the one in the photo |
+| Bounce proxy counted as CG by the shadow-catcher pass | see below |
+
+### The bounce proxy was re-lighting the photograph
+
+The artifacts around the glass and the train were this. The shadow-catcher
+pass is a ratio: light reaching the catcher WITH the CG objects over the light
+reaching it WITHOUT them. Cycles counted the bounce proxy as CG, so it appeared
+in the numerator only. Being solid to diffuse and glossy rays, it occluded sky
+from the shadow proxy standing right behind it and substituted plate-derived
+emission — dimmer than the sky under the canopy, brighter than it around the
+glass. The ratio left 1 in both directions and the compositor applied the
+difference to a photograph that already looked exactly the way it should.
+
+Measured on IMG_9920, pixels more than 2% darkened, and the mean multiplier:
+
+| | before | after |
+|---|---|---|
+| whole frame | 14.43%, mean 35.0 | 0.86%, mean 0.994 |
+| canopy | 26.92% | 2.33% |
+| train | 12.23% | 0.05% |
+
+The mean of 35 is the bright half of the same bug, and is why the glass had
+fringes rather than just shadows.
+
+The fix is one flag: the bounce proxy is marked a shadow catcher too. It is
+camera-invisible so it never catches anything; the flag only tells Cycles which
+side of the ratio it belongs on. On the non-CG side it appears in both legs and
+cancels, and because Cycles keeps shadow catchers visible to indirect rays it
+goes on lighting CG unchanged (a white sphere sat at 1.13x the no-bounce
+brightness before and after).
+
+Light linking was tried first, excluding the catchers as receivers of the
+bounce. It fails, because the problem is occlusion and light linking governs
+illumination: the emission stopped, the occlusion did not, and the darkened
+fraction went to 80%. `tools/render_checks.py` now measures both halves — that
+attempt would have passed a check that only looked at the plate.

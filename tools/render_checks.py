@@ -240,6 +240,88 @@ def main() -> int:
         assert redness > 0.01, ("the chrome sphere is not picking up the red plate — "
                                 "check the Window coordinate link")
 
+    @check("bounce proxy lights CG without darkening the plate")
+    def _():
+        """The bounce proxy has to add light to CG and change the photograph not
+        at all. Getting one without the other is easy and was shipped twice.
+
+        The shadow-catcher pass is a ratio of light-with-CG over
+        light-without-CG. A bounce proxy Cycles counts as CG appears in the
+        numerator only, where it blocks sky from the shadow proxy behind it and
+        substitutes dimmer plate emission — so the ratio drops below 1 and the
+        compositor darkens the plate. Marking the bounce a shadow catcher puts
+        it in both legs, where it cancels.
+
+        Both assertions are load-bearing. Dropping the plate darkening is
+        trivial if you are allowed to stop the bounce reaching CG (make it
+        invisible to rays, or light-link the catchers away — that one measured
+        80 % of the plate darkened), and such a bounce proxy does nothing at
+        all. The sphere assertion is what stops that being called a fix.
+        """
+        from photo3d import solve as solve_mod
+
+        scene, ground, plate = build_scene(with_shadow_catcher_material=True)
+
+        # A bright sky. Without one there is nothing for the bounce proxy to
+        # occlude, the substitution costs nothing, and the check passes on
+        # broken code — which the version before this one did.
+        world = bpy.data.worlds.new("sky")
+        world.use_nodes = True
+        background = world.node_tree.nodes["Background"]
+        background.inputs["Color"].default_value = (0.35, 0.5, 0.9, 1.0)
+        background.inputs["Strength"].default_value = 3.0
+        scene.world = world
+
+        # A canopy over the ground, joined into the SAME proxy object. This is
+        # the geometry the bug needs and a bare ground plane cannot supply: one
+        # part of the proxy occluding the sky from another part. A coincident
+        # copy of a flat plane blocks nothing, so a flat test scene reports the
+        # bug fixed whether it is or not — the first version of this check did
+        # exactly that.
+        bpy.ops.mesh.primitive_plane_add(size=6.0, location=(0.0, 0.0, 3.0))
+        canopy = bpy.context.active_object
+        bpy.ops.object.select_all(action="DESELECT")
+        canopy.select_set(True)
+        ground.select_set(True)
+        bpy.context.view_layer.objects.active = ground
+        bpy.ops.object.join()
+
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=0.8, location=(0.0, 0.0, 0.8))
+        sphere = bpy.context.active_object
+        mat = bpy.data.materials.new("white")
+        mat.use_nodes = True
+        mat.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (
+            0.8, 0.8, 0.8, 1.0)
+        sphere.data.materials.append(mat)
+
+        # Mask the sphere before compositing: Alpha Over makes alpha 1.0
+        # everywhere and there is then nothing left to tell CG from plate.
+        ground.hide_render = True
+        sphere_only = render_rgba()
+        ground.hide_render = False
+        cg = sphere_only[..., 3] > 0.5
+        assert cg.sum() > 50, "the sphere did not render"
+
+        solve_mod.setup_render(scene, plate, scene.photo3d)
+        before = render_rgba()
+        bpy.ops.photo3d.bounce_proxy()
+        bounce = bpy.data.objects.get("Photo3D_Bounce")
+        assert bounce is not None, "Build Bounce Proxy made no bounce proxy"
+        after = render_rgba()
+
+        open_plate = (~cg) & (before[..., 0] > 0.01)
+        plate_ratio = float(after[..., 0][open_plate].mean()
+                            / before[..., 0][open_plate].mean())
+        cg_ratio = float(after[..., :3][cg].mean() / before[..., :3][cg].mean())
+        print(f"        plate {plate_ratio:.4f}x, CG {cg_ratio:.4f}x "
+              f"(catcher={bounce.is_shadow_catcher})")
+        assert plate_ratio > 0.98, (
+            f"the bounce proxy darkened the photograph to {plate_ratio:.3f} of "
+            "itself — it is being counted as CG in the shadow-catcher pass")
+        assert cg_ratio > 1.005, (
+            f"the bounce proxy left CG at {cg_ratio:.3f} — it is not reaching "
+            "CG at all, so it is doing nothing")
+
     print()
     if FAILURES:
         print(f"{len(FAILURES)} FAILED: {', '.join(FAILURES)}")

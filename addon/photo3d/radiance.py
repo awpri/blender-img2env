@@ -180,8 +180,38 @@ class PHOTO3D_OT_bounce_proxy(bpy.types.Operator):
         #   diffuse/glossy OFF                   ON, emissive
         #   shadow         on                    off
         #   collision      yes                   no
+        #   catcher        yes                   yes  <- see below
+        #
+        # The bounce proxy must ALSO be a shadow catcher, which reads as a
+        # contradiction — it is invisible to the camera, so it can never catch
+        # anything. The flag is not doing its usual job here; it is telling
+        # Cycles which side of the shadow-catcher ratio this object belongs on.
+        #
+        # That pass is a multiplier: for each camera ray reaching a catcher it
+        # divides the light arriving WITH the CG objects present by the light
+        # arriving WITHOUT them. Anything Cycles counts as CG appears in the
+        # numerator only. The bounce proxy is solid to diffuse and glossy rays,
+        # so counted as CG it occludes sky from the shadow proxy standing
+        # directly behind it and substitutes dimmer plate-derived emission. The
+        # ratio falls below 1, and the compositor dutifully darkens a
+        # photograph that was already that dark — the same double-counting that
+        # this whole file is arranged to avoid, arriving by a back route.
+        #
+        # Marking it a catcher puts it on the non-CG side, so it is present in
+        # both legs and cancels. Cycles keeps shadow catchers visible to
+        # indirect rays, so it goes on lighting CG exactly as before. Measured
+        # on a solved station scene, white sphere masked by its own alpha:
+        #
+        #                          plate pixels darkened   sphere brightness
+        #   no bounce proxy                 0.99 %              0.5128
+        #   bounce, plain                  14.43 %              0.5345
+        #   bounce, catcher                 0.86 %              0.5348
+        #
+        # Both columns matter. Light linking was tried first and fails both:
+        # excluding the catchers as receivers stops the emission without
+        # stopping the occlusion, which took the darkening to 80 %.
         set_ray_visibility(bounce, camera=False, diffuse=True, glossy=True,
-                           transmission=True, shadow=False)
+                           transmission=True, shadow=False, shadow_catcher=True)
         bounce.display_type = "BOUNDS"
         if bounce.rigid_body is not None:
             with context.temp_override(object=bounce, active_object=bounce,
@@ -196,7 +226,8 @@ class PHOTO3D_OT_bounce_proxy(bpy.types.Operator):
                   if is_linear else
                   "display-referred plate — highlights are clipped, so the sky "
                   "will under-read. Shoot ProRAW for the lighting plate")
-        self.report({"INFO"}, f"bounce proxy built from the {origin}")
+        self.report({"INFO"}, f"bounce proxy built from the {origin}. It lights CG "
+                              "without re-darkening the photograph")
         return {"FINISHED"}
 
 
@@ -218,7 +249,7 @@ class PHOTO3D_OT_toggle_bounce(bpy.types.Operator):
         # rather than one of them simply being darker.
         turning_on = not bounce.visible_diffuse
         set_ray_visibility(bounce, camera=False, diffuse=turning_on, glossy=turning_on,
-                           transmission=turning_on, shadow=False)
+                           transmission=turning_on, shadow=False, shadow_catcher=True)
         if source is not None:
             source.visible_diffuse = not turning_on
             source.visible_glossy = not turning_on
