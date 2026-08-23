@@ -147,6 +147,12 @@ cancels, and because Cycles keeps shadow catchers visible to indirect rays it
 goes on lighting CG unchanged (a white sphere sat at 1.13x the no-bounce
 brightness before and after).
 
+A bounce proxy built before 0.14.0 carries no such flag, and a .blend saved
+back then keeps the old behaviour forever, because the flag is only applied at
+build time and nothing else would ever set it. Diagnose repairs it in place.
+Worth knowing when a render still shows outlines after the upgrade: reinstalling
+the add-on does not touch objects already in the scene.
+
 Light linking was tried first, excluding the catchers as receivers of the
 bounce. It fails, because the problem is occlusion and light linking governs
 illumination: the emission stopped, the occlusion did not, and the darkened

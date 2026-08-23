@@ -646,6 +646,19 @@ class PHOTO3D_OT_diagnose(bpy.types.Operator):
         else:
             notes.append(f"{len(proxies)} shadow catcher(s)")
 
+        # A bounce proxy built before 0.14.0 carries no shadow-catcher flag, and
+        # a .blend saved back then keeps it forever, because the flag is only
+        # set at build time. Repair it rather than merely reporting it: an
+        # unticked checkbox on a camera-invisible object is not something
+        # anyone could reasonably connect to dark outlines around the train.
+        bounce = bpy.data.objects.get("Photo3D_Bounce")
+        if bounce is not None and not bounce.is_shadow_catcher:
+            bounce.is_shadow_catcher = True
+            notes.append("REPAIRED the bounce proxy: it was not marked a shadow "
+                         "catcher, so Cycles counted it as a CG object and it was "
+                         "darkening the photograph along every silhouette. "
+                         "Re-render to see the difference")
+
         sun = bpy.data.objects.get("Photo3D_Sun")
         if sun is None:
             problems.append("no Photo3D_Sun — without a light there is no shadow")

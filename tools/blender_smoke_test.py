@@ -321,6 +321,12 @@ def main() -> int:
 
         assert not bounce.visible_camera and bounce.visible_diffuse
         assert not bounce.visible_shadow
+        # Not a contradiction with visible_camera=False: the flag is what tells
+        # Cycles the bounce is scene rather than CG, so it appears in both legs
+        # of the shadow-catcher ratio and cancels instead of darkening the plate.
+        assert bounce.is_shadow_catcher, (
+            "the bounce proxy is not a shadow catcher, so Cycles counts it as CG "
+            "and it will draw dark outlines along every silhouette")
         assert bounce.rigid_body is None, "the emissive twin must not collide"
         assert not shadow.visible_diffuse and not shadow.visible_glossy, \
             "the shadow proxy must stop contributing indirect light"
@@ -334,6 +340,17 @@ def main() -> int:
         emission = next(n for n in bounce.material_slots[0].material.node_tree.nodes
                         if n.type == "EMISSION")
         assert emission.inputs["Strength"].default_value > 0.0
+
+    @check("diagnose repairs a pre-0.14 bounce proxy")
+    def _():
+        """A .blend saved before 0.14.0 has a bounce proxy with no
+        shadow-catcher flag, and nothing would ever set it: the flag is applied
+        at build time and the user has no reason to rebuild."""
+        bounce = bpy.data.objects["Photo3D_Bounce"]
+        bounce.is_shadow_catcher = False                 # the old on-disk state
+        assert bpy.ops.photo3d.diagnose() == {"FINISHED"}
+        assert bounce.is_shadow_catcher, (
+            "Diagnose left an old bounce proxy counted as CG")
 
     @check("bounce A/B toggle is symmetric")
     def _():
