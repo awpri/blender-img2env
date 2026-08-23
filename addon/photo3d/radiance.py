@@ -766,9 +766,29 @@ class PHOTO3D_OT_bake_gobo(bpy.types.Operator):
         tree.links.new(transparent.outputs["BSDF"], output.inputs["Surface"])
         plane.data.materials.append(material)
 
-        # It exists only to tint shadow rays.
+        # It exists only to tint shadow rays -- and it must be a shadow catcher,
+        # for the same reason the bounce proxy is one.
+        #
+        # The gobo carries shade extracted FROM THE PHOTOGRAPH. Cycles counts
+        # any shadow-casting object that is not a catcher as CG, and the
+        # shadow-catcher pass is a ratio of light-with-CG over light-without-CG,
+        # so a CG gobo appears in the numerator alone: the compositor then
+        # multiplies the plate by the plate's own dapple. Measured on IMG_9920,
+        # composite against plate:
+        #
+        #                        plate darkened   median   white cube
+        #   no gobo                    3.27 %      1.000     0.3579
+        #   gobo counted as CG        96.43 %      0.165     0.2157
+        #   gobo as shadow catcher     4.37 %      1.000     0.2180
+        #
+        # 96 % of the photograph multiplied down to a sixth of its brightness.
+        # Marking it a catcher puts it in both legs of the ratio, where it
+        # cancels, while it goes on dappling CG exactly as before -- the cube
+        # is unchanged at 0.218, still darkened from the 0.358 it reads with no
+        # gobo at all. Both columns matter: a gobo that stopped reaching CG
+        # would leave the plate alone and do nothing.
         set_ray_visibility(plane, camera=False, diffuse=False, glossy=False,
-                           transmission=False, shadow=True)
+                           transmission=False, shadow=True, shadow_catcher=True)
         plane.visible_volume_scatter = False
         plane.display_type = "WIRE"
 

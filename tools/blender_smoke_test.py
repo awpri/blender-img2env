@@ -367,6 +367,24 @@ def main() -> int:
         assert bpy.ops.photo3d.calibrate_bounce() == {"FINISHED"}
         assert props.bounce_strength != 999.0
 
+    @check("sun gobo is a shadow catcher, not a CG shadow caster")
+    def _():
+        """The gobo carries shade taken FROM the photograph, so it must not be
+        counted as CG: the shadow-catcher pass would then hand the compositor
+        the plate's own dapple to multiply the plate by. Measured on IMG_9920
+        at 96.43% of the frame darkened to a median of 0.165."""
+        assert bpy.ops.photo3d.bake_gobo() == {"FINISHED"}
+        gobo = bpy.data.objects["Photo3D_Gobo"]
+        assert gobo.visible_shadow, "the gobo must still tint shadow rays"
+        assert not gobo.visible_camera, "the gobo must never be seen directly"
+        assert gobo.is_shadow_catcher, (
+            "the gobo is not a shadow catcher, so Cycles counts it as CG and the "
+            "compositor darkens the photograph with its own shade pattern")
+
+        gobo.is_shadow_catcher = False           # a gobo baked before 0.15.0
+        assert bpy.ops.photo3d.diagnose() == {"FINISHED"}
+        assert gobo.is_shadow_catcher, "Diagnose left an old gobo counted as CG"
+
     @check("gobo bake restores the scene when the render fails")
     def _():
         """The flagged gotcha: a failed bake used to leave the proxy wearing a

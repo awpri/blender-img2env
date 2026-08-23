@@ -659,6 +659,14 @@ class PHOTO3D_OT_diagnose(bpy.types.Operator):
                          "darkening the photograph along every silhouette. "
                          "Re-render to see the difference")
 
+        gobo = bpy.data.objects.get("Photo3D_Gobo")
+        if gobo is not None and not gobo.is_shadow_catcher:
+            gobo.is_shadow_catcher = True
+            notes.append("REPAIRED the sun gobo: it was not marked a shadow catcher, "
+                         "so the compositor was multiplying the photograph by the "
+                         "photograph's own shade pattern. Re-render to see the "
+                         "difference")
+
         sun = bpy.data.objects.get("Photo3D_Sun")
         if sun is None:
             problems.append("no Photo3D_Sun — without a light there is no shadow")

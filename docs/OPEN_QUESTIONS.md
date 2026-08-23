@@ -118,6 +118,35 @@ All real, none of them the shadow bug:
 | Glass regions made camera-visible | rendered a second sheet over the one in the photo |
 | Bounce proxy counted as CG by the shadow-catcher pass | see below |
 
+### The sun gobo was re-shading the photograph
+
+The same defect as the bounce proxy below, on a different object, found only
+because a user reported outlines and a dark ground after the bounce was fixed.
+
+The gobo is a plane in front of the sun carrying shade extracted FROM the
+plate. Cycles counts any shadow-casting object that is not a shadow catcher as
+CG, so it landed in the numerator of the ratio alone and the compositor
+multiplied the photograph by the photograph's own dapple. Measured on IMG_9920,
+composite against plate, with a white cube for the other half of the check:
+
+| | plate darkened | median | cube |
+|---|---|---|---|
+| no gobo | 3.27% | 1.000 | 0.3579 |
+| gobo counted as CG | 96.43% | 0.165 | 0.2157 |
+| gobo as shadow catcher | 4.37% | 1.000 | 0.2180 |
+
+96% of the frame multiplied down to a sixth. The cube is unchanged by the fix
+and still dappled — 0.218 against the 0.358 it reads with no gobo — so the gobo
+goes on doing its job.
+
+**The generalisation, which is the part worth keeping:** every object this
+pipeline builds to represent light the photograph has ALREADY RECORDED must be
+marked a shadow catcher, whatever else it does. The flag does not mean "this
+surface catches shadows"; it means "Cycles, count this as scene, not as CG".
+An audit of the pipeline after this fix found the ground plane, the proxy, the
+material regions and the bounce all correctly flagged, and the gobo the only
+object casting shadows onto the plate while classified as CG.
+
 ### The bounce proxy was re-lighting the photograph
 
 The artifacts around the glass and the train were this. The shadow-catcher
