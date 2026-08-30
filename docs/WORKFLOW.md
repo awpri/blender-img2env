@@ -145,6 +145,43 @@ calibrations use.
 
 ---
 
+## 5c. Probe — why your object still does not match
+
+Match Exposure to Plate solves for the **ground**, under an assumed albedo.
+Then you put your object somewhere the ground is not: under a canopy, beside a
+window, in the shade of a train. The real radiance there can be several times
+what the ground gets, and until now nothing told you by how much — so the last
+step of a pipeline where everything else was measured got done by eye.
+
+Select your object and press **Probe Lighting At Object**. It puts a matte 18%
+grey sphere exactly where your object is, renders it through the real pipeline,
+and prints what it came out as beside the photograph immediately around it:
+
+    18% grey at the object: R 0.1421 G 0.1120 B 0.0902
+    photograph around it:   R 0.1329 G 0.0844 B 0.0513
+    brightness ratio 1.18x
+    warmth R:B  CG 1.58  plate 2.59
+
+**Read it honestly.** The sphere is 18% grey; the plate beside it is whatever
+that surface happens to be. A single ratio is an exposure match only where the
+surroundings are near mid-grey, so two readings are worth more than the
+absolute number:
+
+* **The change between two probes.** Probe, move one slider, probe again. That
+  difference is albedo-free and it is the number to work with.
+* **The warmth, R:B against the plate's R:B.** Much less sensitive to albedo,
+  and it is what catches the common failure: the photograph is visibly warm
+  where your object stands and the CG is not, which means the bounce is not
+  carrying that light. Raise Bounce saturation, or select the warm surface and
+  use *Make Light From Selection*.
+
+The probe hides your object while it measures, so the sphere stands in the same
+light rather than inside its shadow, and it samples the photograph from a
+render with neither object nor sphere in it — otherwise the sphere's own shadow
+would be read as the photograph it is being compared against.
+
+---
+
 ## 6. Sun and sky
 
 Set automatically from the solar ephemeris. Two knobs worth knowing:

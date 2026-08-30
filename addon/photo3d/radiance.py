@@ -835,9 +835,225 @@ class PHOTO3D_OT_load_panorama(bpy.types.Operator):
         return {"FINISHED"}
 
 
+def _shift(mask, dy, dx):
+    """Translate a boolean mask, filling vacated space with False."""
+    h, w = mask.shape
+    out = np.zeros_like(mask)
+    out[max(dy, 0):h + min(dy, 0), max(dx, 0):w + min(dx, 0)] = \
+        mask[max(-dy, 0):h + min(-dy, 0), max(-dx, 0):w + min(-dx, 0)]
+    return out
+
+
+def _dilate(mask, k):
+    """Square dilation, done separably: 2*(2k+1) shifts rather than (2k+1)**2.
+
+    Shifts rather than np.roll — roll wraps, so a probe near a frame edge would
+    gather its "surroundings" from the opposite side of the picture.
+    """
+    for axis in (0, 1):
+        grown = np.zeros_like(mask)
+        for d in range(-k, k + 1):
+            grown |= _shift(mask, d if axis == 0 else 0, 0 if axis == 0 else d)
+        mask = grown
+    return mask
+
+
+def _ring_around(mask, inner=2, outer=8):
+    """The band of pixels surrounding a mask without touching it.
+
+    The inner gap keeps the sphere's own antialiased rim out of the reading —
+    those pixels are part sphere, part photograph, and they drag the plate
+    sample toward the very thing it is meant to be compared against.
+    """
+    return _dilate(mask, outer) & ~_dilate(mask, inner)
+
+
+class PHOTO3D_OT_probe_at_object(bpy.types.Operator):
+    """Render an 18% grey sphere where your object is and measure the light there"""
+    bl_idname = "photo3d.probe_at_object"
+    bl_label = "Probe Lighting At Object"
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return (obj is not None and obj.type == "MESH"
+                and not obj.name.startswith("Photo3D_"))
+
+    def execute(self, context):
+        """Close the loop between "the numbers are calibrated" and "it matches".
+
+        Match Exposure to Plate solves for the GROUND, under an assumed albedo.
+        Then the object gets placed somewhere the ground is not — under a
+        canopy, beside a warm window — where the real local radiance can be
+        several times different. Nothing else in this pipeline says by how
+        much, so the last step is done by eye against a scene whose every other
+        quantity was measured.
+
+        This puts a matte 18% grey sphere exactly where the object is, renders
+        it through the real pipeline, and prints what it came out as beside the
+        photograph immediately around it.
+
+        THE CAVEAT, because the number is misleading without it: the sphere is
+        18% grey and the plate around it is whatever that surface happens to be.
+        Comparing them is only an exposure match where the surroundings are
+        near mid-grey. Two readings are honest regardless:
+
+          * the ratio's CHANGE as you drag a slider, which is albedo-free —
+            probe, change one thing, probe again;
+          * the colour cast, R:B against the plate's R:B, which is what tells
+            you the bounce is not carrying the warm light you can see in the
+            photograph.
+        """
+        scene = context.scene
+        target = context.active_object
+
+        corners = [target.matrix_world @ Vector(c) for c in target.bound_box]
+        centre = sum(corners, Vector((0.0, 0.0, 0.0))) / 8.0
+        span = max(target.dimensions) if max(target.dimensions) > 0 else 1.0
+        radius = min(max(span * 0.25, 0.05), 0.5)
+
+        saved = {
+            "filepath": scene.render.filepath,
+            "percentage": scene.render.resolution_percentage,
+            "samples": scene.cycles.samples,
+            "file_format": scene.render.image_settings.file_format,
+            "color_depth": scene.render.image_settings.color_depth,
+            "color_mode": scene.render.image_settings.color_mode,
+            "use_compositing": scene.render.use_compositing,
+        }
+        hidden = {o.name: o.hide_render for o in bpy.data.objects}
+        # primitive_uv_sphere_add makes the sphere active, and the sphere is
+        # deleted below — which left no active object at all, so the operator
+        # could not be run a second time. Probing twice is the whole point:
+        # the reading that means anything is the CHANGE between two of them.
+        selection = [o for o in context.view_layer.objects if o.select_get()]
+        sphere = material = None
+        out = os.path.join(bpy.app.tempdir, "photo3d_probe.exr")
+
+        try:
+            material = bpy.data.materials.new("Photo3D_ProbeGrey")
+            material.use_nodes = True
+            tree = material.node_tree
+            tree.nodes.clear()
+            output = tree.nodes.new("ShaderNodeOutputMaterial")
+            diffuse = tree.nodes.new("ShaderNodeBsdfDiffuse")
+            diffuse.inputs["Color"].default_value = (0.18, 0.18, 0.18, 1.0)
+            tree.links.new(diffuse.outputs["BSDF"], output.inputs["Surface"])
+
+            bpy.ops.mesh.primitive_uv_sphere_add(radius=radius, location=centre)
+            sphere = context.active_object
+            sphere.name = "Photo3D_ProbeSphere"
+            sphere.data.materials.append(material)
+
+            # Long edge near 800px: the sphere lands on enough pixels to average
+            # without paying for a full-resolution render of a 48 MP plate.
+            long_edge = max(scene.render.resolution_x, scene.render.resolution_y)
+            scene.render.resolution_percentage = int(
+                min(100, max(5, round(800.0 / max(long_edge, 1) * 100))))
+            scene.cycles.samples = max(32, min(96, scene.cycles.samples))
+            scene.render.image_settings.file_format = "OPEN_EXR"
+            scene.render.image_settings.color_depth = "32"
+
+            def render(rgba: bool) -> np.ndarray:
+                scene.render.image_settings.color_mode = "RGBA" if rgba else "RGB"
+                scene.render.filepath = out
+                bpy.ops.render.render(write_still=True)
+                image = bpy.data.images.load(out, check_existing=False)
+                buf = np.empty(image.size[0] * image.size[1] * 4, dtype=np.float32)
+                image.pixels.foreach_get(buf)
+                array = buf.reshape(image.size[1], image.size[0], 4).copy()
+                bpy.data.images.remove(image)
+                return array
+
+            # 1. the plate as it stands, with neither the object nor the sphere:
+            #    sampling the ring off a render containing the sphere would read
+            #    the sphere's own shadow as if it were the photograph.
+            target.hide_render = True
+            sphere.hide_render = True
+            scene.render.use_compositing = True
+            plate = render(False)[..., :3]
+
+            # 2. the sphere standing in for the object
+            sphere.hide_render = False
+            lit = render(False)[..., :3]
+
+            # 3. its silhouette, from a raw render with everything else gone
+            for obj in bpy.data.objects:
+                if obj.type == "MESH" and obj is not sphere:
+                    obj.hide_render = True
+            scene.render.use_compositing = False
+            mask = render(True)[..., 3] > 0.5
+        except Exception as exc:                                   # noqa: BLE001
+            self.report({"ERROR"}, f"probe render failed: {exc}")
+            return {"CANCELLED"}
+        finally:
+            if sphere is not None:
+                bpy.data.objects.remove(sphere, do_unlink=True)
+            if material is not None:
+                bpy.data.materials.remove(material)
+            for name, was_hidden in hidden.items():
+                obj = bpy.data.objects.get(name)
+                if obj is not None:
+                    obj.hide_render = was_hidden
+            for obj in context.view_layer.objects:
+                obj.select_set(obj in selection)
+            context.view_layer.objects.active = target
+            scene.render.filepath = saved["filepath"]
+            scene.render.resolution_percentage = saved["percentage"]
+            scene.cycles.samples = saved["samples"]
+            scene.render.image_settings.file_format = saved["file_format"]
+            scene.render.image_settings.color_depth = saved["color_depth"]
+            scene.render.image_settings.color_mode = saved["color_mode"]
+            scene.render.use_compositing = saved["use_compositing"]
+
+        if mask.sum() < 20:
+            self.report({"ERROR"}, "the probe sphere is not visible from the camera — "
+                                   "is the object behind the proxy, or off screen?")
+            return {"CANCELLED"}
+
+        ring = _ring_around(mask, inner=2, outer=8) & (plate.mean(axis=2) > 1e-4)
+        if ring.sum() < 20:
+            self.report({"ERROR"}, "no photograph around the object to compare against")
+            return {"CANCELLED"}
+
+        cg = lit[mask].mean(axis=0)
+        near = plate[ring].mean(axis=0)
+        cg_luma, near_luma = float(cg.mean()), float(near.mean())
+        ratio = cg_luma / near_luma if near_luma > 1e-6 else float("inf")
+
+        self.report({"INFO"}, f"18% grey at the object: "
+                              f"R {cg[0]:.4f} G {cg[1]:.4f} B {cg[2]:.4f}")
+        self.report({"INFO"}, f"photograph around it:   "
+                              f"R {near[0]:.4f} G {near[1]:.4f} B {near[2]:.4f}")
+        self.report({"INFO"}, f"brightness ratio {ratio:.2f}x  "
+                              f"({int(mask.sum())} sphere px, {int(ring.sum())} plate px)")
+
+        # Warm/cool is the reading that survives not knowing the plate's albedo.
+        cg_warm = float(cg[0] / cg[2]) if cg[2] > 1e-6 else float("inf")
+        near_warm = float(near[0] / near[2]) if near[2] > 1e-6 else float("inf")
+        self.report({"INFO"}, f"warmth R:B  CG {cg_warm:.2f}  plate {near_warm:.2f}")
+
+        if ratio < 0.75:
+            self.report({"WARNING"}, "CG reads dark for this spot — raise Bounce "
+                                     "strength, or add a light for a source the "
+                                     "proxy cannot see")
+        elif ratio > 1.4:
+            self.report({"WARNING"}, "CG reads bright — lower sun or sky, or re-run "
+                                     "Match Exposure to Plate")
+        if near_warm > cg_warm * 1.25:
+            self.report({"WARNING"}, "the photograph here is warmer than your CG. The "
+                                     "bounce is not carrying that light: raise Bounce "
+                                     "saturation, or select the warm surface and use "
+                                     "Make Light From Selection")
+        self.report({"INFO"}, "the sphere is 18% grey and the plate is whatever is "
+                              "there, so trust the CHANGE between two probes more "
+                              "than one absolute ratio")
+        return {"FINISHED"}
+
+
 CLASSES = (PHOTO3D_OT_calibrate_exposure, PHOTO3D_OT_bounce_proxy, PHOTO3D_OT_toggle_bounce,
            PHOTO3D_OT_calibrate_bounce, PHOTO3D_OT_fetch_shade_mask, PHOTO3D_OT_bake_gobo,
-           PHOTO3D_OT_load_panorama)
+           PHOTO3D_OT_load_panorama, PHOTO3D_OT_probe_at_object)
 
 
 def register():

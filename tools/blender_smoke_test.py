@@ -414,6 +414,72 @@ def main() -> int:
         after = snapshot()
         assert before == after, f"scene left dirty:\n  before {before}\n  after  {after}"
 
+    @check("probe ring geometry does not touch the sphere or wrap the frame")
+    def _():
+        """The ring is where the probe reads the photograph. If it overlaps the
+        sphere it compares the sphere to itself; if it wraps at a frame edge it
+        compares the object to the opposite side of the picture."""
+        blob = np.zeros((40, 40), dtype=bool)
+        blob[18:22, 18:22] = True
+        ring = radiance._ring_around(blob, inner=2, outer=6)
+        assert ring.any(), "the ring came out empty"
+        assert not (ring & blob).any(), "the ring overlaps the sphere it surrounds"
+        assert not (ring & radiance._dilate(blob, 1)).any(), \
+            "the ring includes the sphere's antialiased rim"
+
+        corner = np.zeros((40, 40), dtype=bool)
+        corner[0:3, 0:3] = True
+        wrapped = radiance._ring_around(corner, inner=2, outer=6)
+        assert not wrapped[-6:, :].any() and not wrapped[:, -6:].any(), \
+            "the ring wrapped around the frame instead of stopping at the edge"
+
+    @check("probe measures the light where an object stands")
+    def _():
+        """The end-to-end path, including that it puts the scene back: this
+        operator changes resolution, samples, file format and compositing, and
+        an earlier probe in this file leaked file_format into every later
+        render."""
+        # The synthetic plate is black, and the probe rightly refuses to
+        # compare an object against no photograph. Give it one.
+        tree = (scene.compositing_node_group
+                if hasattr(scene, "compositing_node_group") else scene.node_tree)
+        plate_image = next(n.image for n in tree.nodes
+                           if n.type == "IMAGE" and n.image is not None)
+        filled = np.zeros(plate_image.size[0] * plate_image.size[1] * 4, np.float32)
+        filled[0::4], filled[1::4], filled[2::4], filled[3::4] = 0.40, 0.32, 0.25, 1.0
+        plate_image.pixels.foreach_set(filled)
+
+        camera = bpy.data.objects["Photo3D_Cam"]
+        from mathutils import Vector as _V
+        ahead = (camera.matrix_world.translation
+                 + (camera.matrix_world.to_quaternion() @ _V((0.0, 0.0, -1.0))) * 4.0)
+        bpy.ops.mesh.primitive_uv_sphere_add(radius=0.4, location=ahead)
+        block = bpy.context.active_object
+        block.name = "ProbeTarget"
+        bpy.context.view_layer.objects.active = block
+
+        before = (scene.render.resolution_percentage, scene.cycles.samples,
+                  scene.render.image_settings.file_format,
+                  scene.render.image_settings.color_mode,
+                  scene.render.use_compositing, scene.render.filepath)
+        assert bpy.ops.photo3d.probe_at_object() == {"FINISHED"}
+        after = (scene.render.resolution_percentage, scene.cycles.samples,
+                 scene.render.image_settings.file_format,
+                 scene.render.image_settings.color_mode,
+                 scene.render.use_compositing, scene.render.filepath)
+        assert before == after, f"probe left the scene dirty:\n  {before}\n  {after}"
+        assert not block.hide_render, "the probe left the object hidden"
+        assert bpy.data.objects.get("Photo3D_ProbeSphere") is None, \
+            "the probe sphere was left in the scene"
+        # Probing twice is the point — the meaningful reading is the change
+        # between two probes — and the first one used to make the second
+        # impossible by deleting the active object out from under it.
+        assert bpy.context.view_layer.objects.active is block, \
+            "the probe did not put the active object back"
+        assert bpy.ops.photo3d.probe_at_object() == {"FINISHED"}, \
+            "the probe cannot be run twice in a row"
+        bpy.data.objects.remove(block, do_unlink=True)
+
     @check("crispify leaves the plate alone")
     def _():
         bpy.ops.mesh.primitive_cube_add()

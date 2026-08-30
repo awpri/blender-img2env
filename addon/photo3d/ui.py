@@ -176,6 +176,10 @@ class PHOTO3D_PT_bounce(Photo3DPanel, bpy.types.Panel):
         layout.operator("photo3d.bounce_proxy", icon="OUTLINER_OB_LIGHT")
         layout.operator("photo3d.toggle_bounce", icon="ARROW_LEFTRIGHT")
 
+        layout.separator()
+        layout.label(text="Select your object, then:", icon="SPHERE")
+        layout.operator("photo3d.probe_at_object", icon="SHADING_RENDERED")
+
 
 class PHOTO3D_PT_sun(Photo3DPanel, bpy.types.Panel):
     bl_label = "Sun & Sky"
